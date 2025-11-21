@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">CoverScreenTrackpad</string>
+    <string name="accessibility_service_description">Input Injector Service for Cover Screen Test</string>
+</resources>
