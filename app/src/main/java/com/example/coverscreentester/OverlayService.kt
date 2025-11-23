@@ -74,42 +74,55 @@ class OverlayService : Service() {
     private var isVScrolling = false
     private var isHScrolling = false
     private val scrollSensitivity = 3.0f 
+    private var scrollZoneThickness = 60 
     
     // --- PREFS ---
     private var prefVibrate = true
     private var prefReverseScroll = true
     private var prefAlpha = 200
-    private var prefHandleSize = 60 // Visual only
+    private var prefHandleSize = 60 
     private var prefVPosLeft = false
     private var prefHPosTop = false
     private var prefLocked = false
     
-    // New Touch Area Prefs
     private var prefHandleTouchSize = 60
     private var prefScrollTouchSize = 60
+    private var prefScrollVisualSize = 4 // 🚨 NEW Visual Thickness
 
     private var dragDownTime: Long = 0L
     private var isFocusActive = true 
     private var currentBorderColor = 0xFFFFFFFF.toInt()
+    
+    // Highlight States for Preview
+    private var highlightAlpha = false
+    private var highlightHandles = false
+    private var highlightScrolls = false
     
     // UI Refs
     private val handleContainers = ArrayList<FrameLayout>()
     private val handleVisuals = ArrayList<View>()
     private var vScrollContainer: FrameLayout? = null
     private var hScrollContainer: FrameLayout? = null
+    private var vScrollVisual: View? = null // 🚨 NEW Ref
+    private var hScrollVisual: View? = null // 🚨 NEW Ref
     
     private val handler = Handler(Looper.getMainLooper())
     private val longPressRunnable = Runnable { startTouchDrag() }
-    
     private var isResizing = false
     private val resizeLongPressRunnable = Runnable { startResize() }
-    
     private var isMoving = false
     private val moveLongPressRunnable = Runnable { startMove() }
-    
     private val rotationRunnable5s = Runnable { resetRotation() }
     private val rotationRunnable3s = Runnable { performRotation() }
     private val voiceRunnable = Runnable { performVoice() }
+    
+    private val clearHighlightsRunnable = Runnable {
+        highlightAlpha = false
+        highlightHandles = false
+        highlightScrolls = false
+        updateBorderColor(currentBorderColor)
+        updateLayoutSizes() 
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -135,9 +148,16 @@ class OverlayService : Service() {
                 "RELOAD_PREFS" -> {
                     loadPrefs()
                     updateBorderColor(currentBorderColor)
-                    updateLayoutSizes() // New helper for touch zones
+                    updateLayoutSizes()
                     updateScrollPosition()
                 }
+                "LOCK_TOGGLE" -> {
+                    prefLocked = !prefLocked
+                    val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("lock_position", prefLocked).apply()
+                    vibrate()
+                }
+                "PREVIEW_UPDATE" -> handlePreview(intent)
             }
         }
 
@@ -157,12 +177,50 @@ class OverlayService : Service() {
         prefLocked = prefs.getBoolean("lock_position", false)
         prefVPosLeft = prefs.getBoolean("v_pos_left", false)
         prefHPosTop = prefs.getBoolean("h_pos_top", false)
-        
-        // New Prefs
         prefHandleTouchSize = prefs.getInt("handle_touch_size", 60)
         prefScrollTouchSize = prefs.getInt("scroll_touch_size", 60)
-        // Visual size of handle icon
-        prefHandleSize = 60 
+        prefHandleSize = prefs.getInt("handle_size", 60)
+        prefScrollVisualSize = prefs.getInt("scroll_visual_size", 4)
+        
+        scrollZoneThickness = prefScrollTouchSize
+    }
+    
+    private fun handlePreview(intent: Intent) {
+        val target = intent.getStringExtra("TARGET")
+        val value = intent.getIntExtra("VALUE", 0)
+        
+        handler.removeCallbacks(clearHighlightsRunnable)
+        
+        when (target) {
+            "alpha" -> {
+                prefAlpha = value
+                highlightAlpha = true
+                updateBorderColor(currentBorderColor) 
+            }
+            "handle_touch" -> {
+                prefHandleTouchSize = value
+                highlightHandles = true
+                updateLayoutSizes()
+            }
+            "scroll_touch" -> {
+                prefScrollTouchSize = value
+                scrollZoneThickness = value
+                highlightScrolls = true
+                updateLayoutSizes()
+                updateScrollPosition() 
+            }
+            "handle_size" -> {
+                prefHandleSize = value
+                highlightHandles = true 
+                updateHandleSize()
+            }
+            "scroll_visual" -> {
+                prefScrollVisualSize = value
+                highlightScrolls = true // Highlight container so user can see context
+                updateLayoutSizes() // Updates visual thickness
+            }
+        }
+        handler.postDelayed(clearHighlightsRunnable, 1500)
     }
 
     private fun setupWindows(displayId: Int) {
@@ -238,7 +296,6 @@ class OverlayService : Service() {
         handleVisuals.clear()
         val handleColor = 0x15FFFFFF.toInt()
         
-        // Setup Handles
         addHandle(context, Gravity.TOP or Gravity.RIGHT, handleColor) { v, e -> moveWindow(e) }
         addHandle(context, Gravity.BOTTOM or Gravity.RIGHT, handleColor) { v, e -> resizeWindow(e) }
         addHandle(context, Gravity.BOTTOM or Gravity.LEFT, handleColor) { v, e -> openMenuHandle(e) }
@@ -279,18 +336,16 @@ class OverlayService : Service() {
     }
 
     private fun addHandle(context: Context, gravity: Int, color: Int, onTouch: (View, MotionEvent) -> Boolean) {
-        // Container uses the TOUCH size preference
         val container = FrameLayout(context)
         val containerParams = FrameLayout.LayoutParams(prefHandleTouchSize, prefHandleTouchSize)
         containerParams.gravity = gravity
         
-        // Visual uses fixed size (or prefHandleSize if you added that slider later)
         val visual = View(context)
         val bg = GradientDrawable()
         bg.setColor(color)
         bg.cornerRadii = floatArrayOf(15f,15f, 15f,15f, 15f,15f, 15f,15f)
         visual.background = bg
-        val visualParams = FrameLayout.LayoutParams(60, 60) // Fixed visual size
+        val visualParams = FrameLayout.LayoutParams(prefHandleSize, prefHandleSize)
         visualParams.gravity = Gravity.CENTER
         
         container.addView(visual, visualParams)
@@ -301,30 +356,61 @@ class OverlayService : Service() {
         container.setOnTouchListener { v, event -> onTouch(v, event) }
     }
     
+    private fun updateHandleSize() {
+        for (visual in handleVisuals) {
+            val params = visual.layoutParams as FrameLayout.LayoutParams
+            params.width = prefHandleSize
+            params.height = prefHandleSize
+            visual.layoutParams = params
+        }
+    }
+    
     private fun updateLayoutSizes() {
-        // Update Handles
+        // 1. Update Handles
         for (container in handleContainers) {
             val params = container.layoutParams as FrameLayout.LayoutParams
             params.width = prefHandleTouchSize
             params.height = prefHandleTouchSize
             container.layoutParams = params
+            if (highlightHandles) container.setBackgroundColor(0x4000FF00.toInt()) 
+            else container.setBackgroundColor(Color.TRANSPARENT)
         }
-        // Scroll bars are updated in updateScrollPosition or similar, 
-        // but since they are views, let's update them here:
+        
+        // 2. Update Scroll Bars Containers AND Visuals
+        val margin = prefHandleTouchSize + 10
+        
         if (vScrollContainer != null) {
             val params = vScrollContainer!!.layoutParams as FrameLayout.LayoutParams
             params.width = prefScrollTouchSize
-            // Margins to avoid overlap with Handles
-            val margin = prefHandleTouchSize + 10
             params.setMargins(0, margin, 0, margin)
             vScrollContainer!!.layoutParams = params
+            
+            if (highlightScrolls) vScrollContainer!!.setBackgroundColor(0x4000FF00.toInt())
+            else vScrollContainer!!.setBackgroundColor(Color.TRANSPARENT)
+            
+            // Update Inner Visual Width
+            if (vScrollVisual != null) {
+                val visParams = vScrollVisual!!.layoutParams as FrameLayout.LayoutParams
+                visParams.width = prefScrollVisualSize
+                vScrollVisual!!.layoutParams = visParams
+            }
         }
+        
         if (hScrollContainer != null) {
             val params = hScrollContainer!!.layoutParams as FrameLayout.LayoutParams
             params.height = prefScrollTouchSize
-            val margin = prefHandleTouchSize + 10
             params.setMargins(margin, 0, margin, 0)
             hScrollContainer!!.layoutParams = params
+            
+            if (highlightScrolls) hScrollContainer!!.setBackgroundColor(0x4000FF00.toInt())
+            else hScrollContainer!!.setBackgroundColor(Color.TRANSPARENT)
+            
+            // Update Inner Visual Height
+            if (hScrollVisual != null) {
+                val visParams = hScrollVisual!!.layoutParams as FrameLayout.LayoutParams
+                visParams.height = prefScrollVisualSize
+                hScrollVisual!!.layoutParams = visParams
+            }
         }
     }
 
@@ -338,11 +424,11 @@ class OverlayService : Service() {
         vParams.setMargins(0, margin, 0, margin)
         trackpadLayout?.addView(vScrollContainer, vParams)
         
-        val vVisual = View(context)
-        vVisual.setBackgroundColor(0x30FFFFFF.toInt())
-        val vVisParams = FrameLayout.LayoutParams(4, FrameLayout.LayoutParams.MATCH_PARENT)
+        vScrollVisual = View(context)
+        vScrollVisual!!.setBackgroundColor(0x30FFFFFF.toInt())
+        val vVisParams = FrameLayout.LayoutParams(prefScrollVisualSize, FrameLayout.LayoutParams.MATCH_PARENT)
         vVisParams.gravity = Gravity.CENTER_HORIZONTAL
-        vScrollContainer?.addView(vVisual, vVisParams)
+        vScrollContainer?.addView(vScrollVisual, vVisParams)
 
         // Horizontal
         hScrollContainer = FrameLayout(context)
@@ -351,11 +437,11 @@ class OverlayService : Service() {
         hParams.setMargins(margin, 0, margin, 0)
         trackpadLayout?.addView(hScrollContainer, hParams)
         
-        val hVisual = View(context)
-        hVisual.setBackgroundColor(0x30FFFFFF.toInt())
-        val hVisParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 4)
+        hScrollVisual = View(context)
+        hScrollVisual!!.setBackgroundColor(0x30FFFFFF.toInt())
+        val hVisParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, prefScrollVisualSize)
         hVisParams.gravity = Gravity.CENTER_VERTICAL
-        hScrollContainer?.addView(hVisual, hVisParams)
+        hScrollContainer?.addView(hScrollVisual, hVisParams)
     }
     
     private fun updateScrollPosition() {
@@ -379,7 +465,7 @@ class OverlayService : Service() {
         val bg = trackpadLayout?.background as? GradientDrawable ?: return
         bg.setColor(Color.TRANSPARENT)
         val colorWithAlpha = (strokeColor and 0x00FFFFFF) or (prefAlpha shl 24)
-        bg.setStroke(4, colorWithAlpha)
+        bg.setStroke(4, if (highlightAlpha) 0xFF00FF00.toInt() else colorWithAlpha)
         trackpadLayout?.invalidate()
     }
 
@@ -431,49 +517,31 @@ class OverlayService : Service() {
         updateBorderColor(0x55FFFFFF.toInt())
     }
 
-    // 🚨 MOVEMENT LOGIC UPDATED: Requires 1s Hold + Lock Check
     private fun moveWindow(event: MotionEvent): Boolean {
-        if (prefLocked) return false // LOCK CHECK
+        // 🚨 LOCK FIX: Consume event if locked (return true) so it doesn't drag or fall through
+        if (prefLocked) return true 
         
         when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                handler.postDelayed(moveLongPressRunnable, 1000)
-                initialWindowX = trackpadParams.x; initialWindowY = trackpadParams.y
-                initialTouchX = event.rawX; initialTouchY = event.rawY
-                return true
-            }
+            MotionEvent.ACTION_DOWN -> { handler.postDelayed(moveLongPressRunnable, 1000); initialWindowX = trackpadParams.x; initialWindowY = trackpadParams.y; initialTouchX = event.rawX; initialTouchY = event.rawY; return true }
             MotionEvent.ACTION_MOVE -> {
-                if (isMoving) {
-                    trackpadParams.x = initialWindowX + (event.rawX - initialTouchX).toInt()
-                    trackpadParams.y = initialWindowY + (event.rawY - initialTouchY).toInt()
-                    windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
-                } else {
-                    // If moved too much before 1s, cancel the long press
-                    if (abs(event.rawX - initialTouchX) > 20) handler.removeCallbacks(moveLongPressRunnable)
-                }
+                if (isMoving) { trackpadParams.x = initialWindowX + (event.rawX - initialTouchX).toInt(); trackpadParams.y = initialWindowY + (event.rawY - initialTouchY).toInt(); windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } 
+                else if (abs(event.rawX - initialTouchX) > 20) handler.removeCallbacks(moveLongPressRunnable)
                 return true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                handler.removeCallbacks(moveLongPressRunnable)
-                if (isMoving) stopMove()
-                return true
-            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(moveLongPressRunnable); if (isMoving) stopMove(); return true }
         }
         return false
     }
     
-    private fun startMove() { isMoving = true; vibrate(); updateBorderColor(0xFF0000FF.toInt()) } // Blue for move
+    private fun startMove() { isMoving = true; vibrate(); updateBorderColor(0xFF0000FF.toInt()) }
     private fun stopMove() { isMoving = false; updateBorderColor(0x55FFFFFF.toInt()) }
 
-    // 🚨 RESIZE LOGIC UPDATED: Lock Check
     private fun resizeWindow(event: MotionEvent): Boolean {
-        if (prefLocked) return false // LOCK CHECK
+        // 🚨 LOCK FIX
+        if (prefLocked) return true 
         
         when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                handler.postDelayed(resizeLongPressRunnable, 1000)
-                initialWindowWidth = trackpadParams.width; initialTouchX = event.rawX; return true
-            }
+            MotionEvent.ACTION_DOWN -> { handler.postDelayed(resizeLongPressRunnable, 1000); initialWindowWidth = trackpadParams.width; initialTouchX = event.rawX; return true }
             MotionEvent.ACTION_MOVE -> {
                 if (isResizing) {
                     val deltaX = event.rawX - initialTouchX
@@ -506,19 +574,13 @@ class OverlayService : Service() {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 lastTouchX = event.x; lastTouchY = event.y
-                val inVZone = if (prefVPosLeft) event.x < prefScrollTouchSize else event.x > (viewWidth - prefScrollTouchSize)
-                val inHZone = if (prefHPosTop) event.y < prefScrollTouchSize else event.y > (viewHeight - prefScrollTouchSize)
+                val inVZone = if (prefVPosLeft) event.x < scrollZoneThickness else event.x > (viewWidth - scrollZoneThickness)
+                val inHZone = if (prefHPosTop) event.y < scrollZoneThickness else event.y > (viewHeight - scrollZoneThickness)
                 if (inVZone) { 
-                    isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()) 
-                    virtualScrollX = cursorX; virtualScrollY = cursorY
-                    dragDownTime = SystemClock.uptimeMillis()
-                    injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                    isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
                 }
                 else if (inHZone) { 
-                    isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt())
-                    virtualScrollX = cursorX; virtualScrollY = cursorY
-                    dragDownTime = SystemClock.uptimeMillis()
-                    injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                    isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
                 }
                 else handler.postDelayed(longPressRunnable, 400)
             }
@@ -527,16 +589,10 @@ class OverlayService : Service() {
                 val rawDy = (event.y - lastTouchY) * sensitivity
                 if (isVScrolling) {
                     val dist = (event.y - lastTouchY) * scrollSensitivity
-                    if (abs(dist) > 0) {
-                        if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist
-                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
-                    }
+                    if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
                 } else if (isHScrolling) {
                     val dist = (event.x - lastTouchX) * scrollSensitivity
-                    if (abs(dist) > 0) {
-                        if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist
-                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
-                    }
+                    if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
                 } else {
                     var finalDx = rawDx; var finalDy = rawDy
                     when (rotationAngle) { 90 -> { finalDx = -rawDy; finalDy = rawDx }; 180 -> { finalDx = -rawDx; finalDy = -rawDy }; 270 -> { finalDx = rawDy; finalDy = -rawDx } }
@@ -554,10 +610,7 @@ class OverlayService : Service() {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { 
                 handler.removeCallbacks(longPressRunnable)
                 if (isTouchDragging) stopTouchDrag()
-                if (isVScrolling || isHScrolling) { 
-                    injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
-                    isVScrolling = false; isHScrolling = false; updateBorderColor(0x55FFFFFF.toInt()) 
-                }
+                if (isVScrolling || isHScrolling) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY); isVScrolling = false; isHScrolling = false; updateBorderColor(0x55FFFFFF.toInt()) }
             }
         }
     }

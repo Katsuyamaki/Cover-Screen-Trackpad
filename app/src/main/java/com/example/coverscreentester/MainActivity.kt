@@ -3,6 +3,7 @@ package com.example.coverscreentester
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -22,6 +23,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var toggleButton: Button
+    private lateinit var lockButton: Button
     private lateinit var settingsButton: Button
     private lateinit var helpButton: Button
     private lateinit var resetButton: Button
@@ -42,6 +44,7 @@ class MainActivity : AppCompatActivity() {
 
         statusText = findViewById(R.id.text_status)
         toggleButton = findViewById(R.id.btn_toggle)
+        lockButton = findViewById(R.id.btn_lock)
         settingsButton = findViewById(R.id.btn_settings)
         helpButton = findViewById(R.id.btn_help)
         resetButton = findViewById(R.id.btn_reset)
@@ -55,6 +58,7 @@ class MainActivity : AppCompatActivity() {
             if (isOverlayPermissionGranted()) startOverlayService() else requestOverlayPermission()
         }
         
+        lockButton.setOnClickListener { toggleLock() }
         settingsButton.setOnClickListener { showSettingsDialog() }
         helpButton.setOnClickListener { showHelpDialog() }
         
@@ -69,6 +73,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkShizukuStatus()
+        updateLockUI()
+    }
+    
+    private fun toggleLock() {
+        sendCommandToService("LOCK_TOGGLE")
+        val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        val current = prefs.getBoolean("lock_position", false)
+        prefs.edit().putBoolean("lock_position", !current).apply()
+        updateLockUI()
+    }
+    
+    private fun updateLockUI() {
+        val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        val isLocked = prefs.getBoolean("lock_position", false)
+        
+        if (isLocked) {
+            lockButton.text = "Position: Locked"
+            lockButton.backgroundTintList = ColorStateList.valueOf(0xFFFF0000.toInt()) // Red
+            lockButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_lock_closed, 0, 0, 0)
+        } else {
+            lockButton.text = "Position: Unlocked"
+            lockButton.backgroundTintList = ColorStateList.valueOf(0xFF3DDC84.toInt()) // Green
+            lockButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_lock_open, 0, 0, 0)
+        }
     }
 
     private fun showHelpDialog() {
@@ -101,7 +129,8 @@ class MainActivity : AppCompatActivity() {
             - Bottom-Left: Open this Main Menu.
 
             • CONFIGURATION:
-            Use the Settings menu to Lock Position, change Scroll locations, or adjust touch sensitivity areas.
+            Use the Settings menu to change Scroll locations, or adjust touch sensitivity areas.
+            Use the Main Menu Lock button to prevent accidental moves.
         """.trimIndent()
         scrollView.addView(text)
 
@@ -123,62 +152,103 @@ class MainActivity : AppCompatActivity() {
         val vibCheck = CheckBox(this)
         vibCheck.text = "Haptic Feedback"
         vibCheck.isChecked = prefs.getBoolean("vibrate", true)
-        vibCheck.textSize = 18f
         
         val reverseCheck = CheckBox(this)
         reverseCheck.text = "Natural Scrolling (Reverse)"
         reverseCheck.isChecked = prefs.getBoolean("reverse_scroll", true)
-        reverseCheck.textSize = 18f
-        
-        val lockCheck = CheckBox(this)
-        lockCheck.text = "Lock Trackpad Position/Size"
-        lockCheck.isChecked = prefs.getBoolean("lock_position", false)
-        lockCheck.textSize = 18f
         
         val vPosCheck = CheckBox(this)
         vPosCheck.text = "Vertical Scroll on Left"
         vPosCheck.isChecked = prefs.getBoolean("v_pos_left", false)
-        vPosCheck.textSize = 18f
         
         val hPosCheck = CheckBox(this)
         hPosCheck.text = "Horizontal Scroll on Top"
         hPosCheck.isChecked = prefs.getBoolean("h_pos_top", false)
-        hPosCheck.textSize = 18f
 
         // 2. Visual Sliders
         val alphaLabel = TextView(this)
         alphaLabel.text = "Border Visibility (Alpha)"
-        alphaLabel.setPadding(0, 40, 0, 20)
         val alphaSeek = SeekBar(this)
         alphaSeek.max = 255
         alphaSeek.progress = prefs.getInt("alpha", 200)
+        
+        alphaSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("alpha", v) }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
 
         // 3. Touch Area Sliders
         val handleTouchLabel = TextView(this)
         handleTouchLabel.text = "Corner Handle Touch Area"
-        handleTouchLabel.setPadding(0, 40, 0, 20)
         val handleTouchSeek = SeekBar(this)
         handleTouchSeek.max = 150
-        handleTouchSeek.progress = prefs.getInt("handle_touch_size", 60) // Default 60px
+        handleTouchSeek.progress = prefs.getInt("handle_touch_size", 60)
+        
+        handleTouchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("handle_touch", Math.max(40, v)) }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
 
         val scrollTouchLabel = TextView(this)
         scrollTouchLabel.text = "Scroll Bar Touch Width"
-        scrollTouchLabel.setPadding(0, 40, 0, 20)
         val scrollTouchSeek = SeekBar(this)
         scrollTouchSeek.max = 150
-        scrollTouchSeek.progress = prefs.getInt("scroll_touch_size", 60) // Default 60px
+        scrollTouchSeek.progress = prefs.getInt("scroll_touch_size", 60)
+        
+        scrollTouchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("scroll_touch", Math.max(30, v)) }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
+        
+        // 4. Visual Size Sliders
+        val handleSizeLabel = TextView(this)
+        handleSizeLabel.text = "Handle Icon Size (Visual)"
+        val handleSizeSeek = SeekBar(this)
+        handleSizeSeek.max = 60
+        handleSizeSeek.progress = prefs.getInt("handle_size", 60)
+        
+        handleSizeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("handle_size", v) }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
+
+        // 🚨 NEW: Scroll Visual Thickness Slider
+        val scrollVisualLabel = TextView(this)
+        scrollVisualLabel.text = "Scroll Bar Thickness (Visual)"
+        val scrollVisualSeek = SeekBar(this)
+        scrollVisualSeek.max = 20 // Max 20px
+        scrollVisualSeek.progress = prefs.getInt("scroll_visual_size", 4)
+        
+        scrollVisualSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("scroll_visual", Math.max(1, v)) }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
         
         layout.addView(vibCheck)
         layout.addView(reverseCheck)
-        layout.addView(lockCheck)
         layout.addView(vPosCheck)
         layout.addView(hPosCheck)
         layout.addView(alphaLabel)
         layout.addView(alphaSeek)
+        
+        // Divider
+        val div1 = TextView(this); div1.text = "--- Touch Areas ---"; div1.gravity = Gravity.CENTER; layout.addView(div1)
         layout.addView(handleTouchLabel)
         layout.addView(handleTouchSeek)
         layout.addView(scrollTouchLabel)
         layout.addView(scrollTouchSeek)
+        
+        // Divider
+        val div2 = TextView(this); div2.text = "--- Visual Sizes ---"; div2.gravity = Gravity.CENTER; layout.addView(div2)
+        layout.addView(handleSizeLabel)
+        layout.addView(handleSizeSeek)
+        layout.addView(scrollVisualLabel)
+        layout.addView(scrollVisualSeek)
 
         AlertDialog.Builder(this)
             .setTitle("Configuration")
@@ -187,18 +257,29 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit()
                     .putBoolean("vibrate", vibCheck.isChecked)
                     .putBoolean("reverse_scroll", reverseCheck.isChecked)
-                    .putBoolean("lock_position", lockCheck.isChecked)
                     .putBoolean("v_pos_left", vPosCheck.isChecked)
                     .putBoolean("h_pos_top", hPosCheck.isChecked)
                     .putInt("alpha", alphaSeek.progress)
-                    .putInt("handle_touch_size", Math.max(40, handleTouchSeek.progress)) // Min 40
-                    .putInt("scroll_touch_size", Math.max(30, scrollTouchSeek.progress)) // Min 30
+                    .putInt("handle_touch_size", Math.max(40, handleTouchSeek.progress))
+                    .putInt("scroll_touch_size", Math.max(30, scrollTouchSeek.progress))
+                    .putInt("handle_size", handleSizeSeek.progress)
+                    .putInt("scroll_visual_size", Math.max(1, scrollVisualSeek.progress))
                     .apply()
                 
                 sendCommandToService("RELOAD_PREFS")
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+    
+    private fun sendPreview(target: String, value: Int) {
+        if (isOverlayPermissionGranted()) {
+            val intent = Intent(this, OverlayService::class.java)
+            intent.action = "PREVIEW_UPDATE"
+            intent.putExtra("TARGET", target)
+            intent.putExtra("VALUE", value)
+            ContextCompat.startForegroundService(this, intent)
+        }
     }
 
     private fun sendCommandToService(action: String) {
@@ -234,6 +315,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         checkShizukuStatus()
+        updateLockUI()
     }
 
     private fun startOverlayService() {
