@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.coverscreentester"
-    compileSdk = 36
+    compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.coverscreentester"
+        applicationId = "com.example.katsuyamaki.coverscreentrackpad"
         minSdk = 30
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
