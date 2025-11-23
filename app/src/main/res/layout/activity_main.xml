@@ -48,6 +48,35 @@
         android:textStyle="bold"
         android:layout_marginBottom="8dp"/>
 
+    <!-- NEW SAVE/LOAD ROW -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="2"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btn_save_pos"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Save Size/Pos"
+            android:backgroundTint="#555555"
+            android:textSize="12sp"
+            android:layout_marginEnd="4dp"/>
+
+        <Button
+            android:id="@+id/btn_load_pos"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Load Size/Pos"
+            android:backgroundTint="#555555"
+            android:textSize="12sp"
+            android:layout_marginStart="4dp"/>
+    </LinearLayout>
+
     <Button
         android:id="@+id/btn_settings"
         android:layout_width="match_parent"

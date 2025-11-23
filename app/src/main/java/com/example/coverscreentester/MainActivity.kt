@@ -24,6 +24,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var toggleButton: Button
     private lateinit var lockButton: Button
+    private lateinit var savePosButton: Button
+    private lateinit var loadPosButton: Button
     private lateinit var settingsButton: Button
     private lateinit var helpButton: Button
     private lateinit var resetButton: Button
@@ -45,6 +47,8 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.text_status)
         toggleButton = findViewById(R.id.btn_toggle)
         lockButton = findViewById(R.id.btn_lock)
+        savePosButton = findViewById(R.id.btn_save_pos)
+        loadPosButton = findViewById(R.id.btn_load_pos)
         settingsButton = findViewById(R.id.btn_settings)
         helpButton = findViewById(R.id.btn_help)
         resetButton = findViewById(R.id.btn_reset)
@@ -59,6 +63,14 @@ class MainActivity : AppCompatActivity() {
         }
         
         lockButton.setOnClickListener { toggleLock() }
+        savePosButton.setOnClickListener { 
+            sendCommandToService("SAVE_LAYOUT")
+            Toast.makeText(this, "Position Saved", Toast.LENGTH_SHORT).show()
+        }
+        loadPosButton.setOnClickListener { 
+            sendCommandToService("LOAD_LAYOUT") 
+            Toast.makeText(this, "Position Loaded", Toast.LENGTH_SHORT).show()
+        }
         settingsButton.setOnClickListener { showSettingsDialog() }
         helpButton.setOnClickListener { showHelpDialog() }
         
@@ -77,11 +89,13 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun toggleLock() {
-        sendCommandToService("LOCK_TOGGLE")
         val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
         val current = prefs.getBoolean("lock_position", false)
-        prefs.edit().putBoolean("lock_position", !current).apply()
+        val newState = !current
+        
+        prefs.edit().putBoolean("lock_position", newState).apply()
         updateLockUI()
+        sendCommandToService("RELOAD_PREFS")
     }
     
     private fun updateLockUI() {
@@ -90,11 +104,11 @@ class MainActivity : AppCompatActivity() {
         
         if (isLocked) {
             lockButton.text = "Position: Locked"
-            lockButton.backgroundTintList = ColorStateList.valueOf(0xFFFF0000.toInt()) // Red
+            lockButton.backgroundTintList = ColorStateList.valueOf(0xFFFF0000.toInt())
             lockButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_lock_closed, 0, 0, 0)
         } else {
             lockButton.text = "Position: Unlocked"
-            lockButton.backgroundTintList = ColorStateList.valueOf(0xFF3DDC84.toInt()) // Green
+            lockButton.backgroundTintList = ColorStateList.valueOf(0xFF3DDC84.toInt())
             lockButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_lock_open, 0, 0, 0)
         }
     }
@@ -111,26 +125,25 @@ class MainActivity : AppCompatActivity() {
             3. Grant 'Overlay' & 'Shizuku' permissions **on the main screen** first. This is required.
             4. Only after permissions are green, open this app on the Cover Screen.
 
-            == USAGE ==
+            == KEYBOARD & FOCUS (IMPORTANT) ==
+            By default, the trackpad "steals" focus to work. This **BLOCKS** the on-screen keyboard from popping up.
             
-            • KEYBOARD & FOCUS: 
-            The trackpad blocks the keyboard by default. 
-            To type: Hold the Top-Left corner (1s). Border turns Red/Yellow (Focus OFF). 
-            Type your text, then tap the trackpad to return to Mouse Mode (Green/White Border).
+            To Type / Use Keyboard:
+            • Hold **Volume Down** (1s) 
+            • OR Hold **Top-Left Corner** (1s)
+            
+            The border will turn Red (Focus OFF). You can now type. Tap the trackpad anywhere to return to Mouse Mode.
 
-            • VOLUME BUTTONS:
-            - Vol UP + Swipe: Drag / Select text.
-            - Vol DOWN: Right Click / Back.
-
-            • CORNER HANDLES:
-            - Top-Left: Hold 1s to toggle Focus/Voice.
-            - Top-Right: Hold 1s to Move Window.
-            - Bottom-Right: Hold 1s to Resize.
-            - Bottom-Left: Open this Main Menu.
-
-            • CONFIGURATION:
-            Use the Settings menu to change Scroll locations, or adjust touch sensitivity areas.
-            Use the Main Menu Lock button to prevent accidental moves.
+            == CONTROLS ==
+            • **Left Click:** Tap anywhere.
+            • **Right Click:** Press Volume Down (Short Press).
+            • **Drag/Scroll:** Hold Volume Up + Swipe.
+            
+            == HANDLES & LAYOUT ==
+            • **Top-Right:** Hold 1s to Move Window.
+            • **Bottom-Right:** Hold 1s to Resize.
+            • **Save/Load:** Use main menu buttons to save your perfect layout.
+            • **Lock:** Use the Lock button to prevent accidental moves.
         """.trimIndent()
         scrollView.addView(text)
 
@@ -143,7 +156,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
-        
         val layout = android.widget.LinearLayout(this)
         layout.orientation = android.widget.LinearLayout.VERTICAL
         layout.setPadding(50, 40, 50, 40)
@@ -171,7 +183,6 @@ class MainActivity : AppCompatActivity() {
         val alphaSeek = SeekBar(this)
         alphaSeek.max = 255
         alphaSeek.progress = prefs.getInt("alpha", 200)
-        
         alphaSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("alpha", v) }
             override fun onStartTrackingTouch(s: SeekBar) {}
@@ -184,7 +195,6 @@ class MainActivity : AppCompatActivity() {
         val handleTouchSeek = SeekBar(this)
         handleTouchSeek.max = 150
         handleTouchSeek.progress = prefs.getInt("handle_touch_size", 60)
-        
         handleTouchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("handle_touch", Math.max(40, v)) }
             override fun onStartTrackingTouch(s: SeekBar) {}
@@ -196,7 +206,6 @@ class MainActivity : AppCompatActivity() {
         val scrollTouchSeek = SeekBar(this)
         scrollTouchSeek.max = 150
         scrollTouchSeek.progress = prefs.getInt("scroll_touch_size", 60)
-        
         scrollTouchSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("scroll_touch", Math.max(30, v)) }
             override fun onStartTrackingTouch(s: SeekBar) {}
@@ -209,20 +218,17 @@ class MainActivity : AppCompatActivity() {
         val handleSizeSeek = SeekBar(this)
         handleSizeSeek.max = 60
         handleSizeSeek.progress = prefs.getInt("handle_size", 60)
-        
         handleSizeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("handle_size", v) }
             override fun onStartTrackingTouch(s: SeekBar) {}
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
 
-        // 🚨 NEW: Scroll Visual Thickness Slider
         val scrollVisualLabel = TextView(this)
         scrollVisualLabel.text = "Scroll Bar Thickness (Visual)"
         val scrollVisualSeek = SeekBar(this)
-        scrollVisualSeek.max = 20 // Max 20px
+        scrollVisualSeek.max = 20
         scrollVisualSeek.progress = prefs.getInt("scroll_visual_size", 4)
-        
         scrollVisualSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) { sendPreview("scroll_visual", Math.max(1, v)) }
             override fun onStartTrackingTouch(s: SeekBar) {}
@@ -236,14 +242,12 @@ class MainActivity : AppCompatActivity() {
         layout.addView(alphaLabel)
         layout.addView(alphaSeek)
         
-        // Divider
         val div1 = TextView(this); div1.text = "--- Touch Areas ---"; div1.gravity = Gravity.CENTER; layout.addView(div1)
         layout.addView(handleTouchLabel)
         layout.addView(handleTouchSeek)
         layout.addView(scrollTouchLabel)
         layout.addView(scrollTouchSeek)
         
-        // Divider
         val div2 = TextView(this); div2.text = "--- Visual Sizes ---"; div2.gravity = Gravity.CENTER; layout.addView(div2)
         layout.addView(handleSizeLabel)
         layout.addView(handleSizeSeek)
@@ -265,7 +269,6 @@ class MainActivity : AppCompatActivity() {
                     .putInt("handle_size", handleSizeSeek.progress)
                     .putInt("scroll_visual_size", Math.max(1, scrollVisualSeek.progress))
                     .apply()
-                
                 sendCommandToService("RELOAD_PREFS")
             }
             .setNegativeButton("Cancel", null)
@@ -285,9 +288,7 @@ class MainActivity : AppCompatActivity() {
     private fun sendCommandToService(action: String) {
         val intent = Intent(this, OverlayService::class.java)
         intent.action = action
-        if (isOverlayPermissionGranted()) {
-             ContextCompat.startForegroundService(this, intent)
-        }
+        if (isOverlayPermissionGranted()) ContextCompat.startForegroundService(this, intent)
     }
 
     private fun checkShizukuStatus() {
@@ -306,9 +307,7 @@ class MainActivity : AppCompatActivity() {
             statusText.setTextColor(0xFF00FF00.toInt())
             toggleButton.text = "Start Trackpad"
             toggleButton.isEnabled = true
-            toggleButton.setOnClickListener { 
-                 if (isOverlayPermissionGranted()) startOverlayService() else requestOverlayPermission()
-            }
+            toggleButton.setOnClickListener { if (isOverlayPermissionGranted()) startOverlayService() else requestOverlayPermission() }
         }
     }
 
@@ -320,15 +319,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startOverlayService() {
         val displayId = display?.displayId ?: android.view.Display.DEFAULT_DISPLAY
-        val intent = Intent(this, OverlayService::class.java).apply {
-            putExtra("DISPLAY_ID", displayId)
-        }
+        val intent = Intent(this, OverlayService::class.java).apply { putExtra("DISPLAY_ID", displayId) }
         ContextCompat.startForegroundService(this, intent)
         moveTaskToBack(true)
     }
 
     private fun isOverlayPermissionGranted(): Boolean = Settings.canDrawOverlays(this)
-
     private fun requestOverlayPermission() {
         Toast.makeText(this, "Grant Overlay Permission", Toast.LENGTH_LONG).show()
         startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
