@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Gravity
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.SeekBar
@@ -78,8 +79,8 @@ class MainActivity : AppCompatActivity() {
         text.text = """
             == SETUP (CRITICAL) ==
             1. Install 'Shizuku' from Play Store & Start it.
-            2. Open this app on your phone's MAIN SCREEN.
-            3. Grant 'Overlay' & 'Shizuku' permissions on the main screen first. This is required.
+            2. Open this app on your phone's **MAIN SCREEN**.
+            3. Grant 'Overlay' & 'Shizuku' permissions **on the main screen** first. This is required.
             4. Only after permissions are green, open this app on the Cover Screen.
 
             == USAGE ==
@@ -95,12 +96,12 @@ class MainActivity : AppCompatActivity() {
 
             • CORNER HANDLES:
             - Top-Left: Hold 1s to toggle Focus/Voice.
-            - Top-Right: Move the trackpad window.
+            - Top-Right: Hold 1s to Move Window.
             - Bottom-Right: Hold 1s to Resize.
             - Bottom-Left: Open this Main Menu.
 
-            • ORIENTATION:
-            Use the 'Rotate' button if you hold the phone sideways. This puts the volume buttons under your index finger for easier clicking/dragging.
+            • CONFIGURATION:
+            Use the Settings menu to Lock Position, change Scroll locations, or adjust touch sensitivity areas.
         """.trimIndent()
         scrollView.addView(text)
 
@@ -118,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         layout.orientation = android.widget.LinearLayout.VERTICAL
         layout.setPadding(50, 40, 50, 40)
 
-        // 1. Behavior Toggles
+        // 1. Toggles
         val vibCheck = CheckBox(this)
         vibCheck.text = "Haptic Feedback"
         vibCheck.isChecked = prefs.getBoolean("vibrate", true)
@@ -129,7 +130,11 @@ class MainActivity : AppCompatActivity() {
         reverseCheck.isChecked = prefs.getBoolean("reverse_scroll", true)
         reverseCheck.textSize = 18f
         
-        // 2. Position Toggles
+        val lockCheck = CheckBox(this)
+        lockCheck.text = "Lock Trackpad Position/Size"
+        lockCheck.isChecked = prefs.getBoolean("lock_position", false)
+        lockCheck.textSize = 18f
+        
         val vPosCheck = CheckBox(this)
         vPosCheck.text = "Vertical Scroll on Left"
         vPosCheck.isChecked = prefs.getBoolean("v_pos_left", false)
@@ -140,7 +145,7 @@ class MainActivity : AppCompatActivity() {
         hPosCheck.isChecked = prefs.getBoolean("h_pos_top", false)
         hPosCheck.textSize = 18f
 
-        // 3. Visual Sliders
+        // 2. Visual Sliders
         val alphaLabel = TextView(this)
         alphaLabel.text = "Border Visibility (Alpha)"
         alphaLabel.setPadding(0, 40, 0, 20)
@@ -148,21 +153,32 @@ class MainActivity : AppCompatActivity() {
         alphaSeek.max = 255
         alphaSeek.progress = prefs.getInt("alpha", 200)
 
-        val handleLabel = TextView(this)
-        handleLabel.text = "Corner Handle Size (Visual Only)"
-        handleLabel.setPadding(0, 40, 0, 20)
-        val handleSeek = SeekBar(this)
-        handleSeek.max = 60 
-        handleSeek.progress = prefs.getInt("handle_size", 60)
+        // 3. Touch Area Sliders
+        val handleTouchLabel = TextView(this)
+        handleTouchLabel.text = "Corner Handle Touch Area"
+        handleTouchLabel.setPadding(0, 40, 0, 20)
+        val handleTouchSeek = SeekBar(this)
+        handleTouchSeek.max = 150
+        handleTouchSeek.progress = prefs.getInt("handle_touch_size", 60) // Default 60px
+
+        val scrollTouchLabel = TextView(this)
+        scrollTouchLabel.text = "Scroll Bar Touch Width"
+        scrollTouchLabel.setPadding(0, 40, 0, 20)
+        val scrollTouchSeek = SeekBar(this)
+        scrollTouchSeek.max = 150
+        scrollTouchSeek.progress = prefs.getInt("scroll_touch_size", 60) // Default 60px
         
         layout.addView(vibCheck)
         layout.addView(reverseCheck)
+        layout.addView(lockCheck)
         layout.addView(vPosCheck)
         layout.addView(hPosCheck)
         layout.addView(alphaLabel)
         layout.addView(alphaSeek)
-        layout.addView(handleLabel)
-        layout.addView(handleSeek)
+        layout.addView(handleTouchLabel)
+        layout.addView(handleTouchSeek)
+        layout.addView(scrollTouchLabel)
+        layout.addView(scrollTouchSeek)
 
         AlertDialog.Builder(this)
             .setTitle("Configuration")
@@ -171,10 +187,12 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit()
                     .putBoolean("vibrate", vibCheck.isChecked)
                     .putBoolean("reverse_scroll", reverseCheck.isChecked)
+                    .putBoolean("lock_position", lockCheck.isChecked)
                     .putBoolean("v_pos_left", vPosCheck.isChecked)
                     .putBoolean("h_pos_top", hPosCheck.isChecked)
                     .putInt("alpha", alphaSeek.progress)
-                    .putInt("handle_size", handleSeek.progress)
+                    .putInt("handle_touch_size", Math.max(40, handleTouchSeek.progress)) // Min 40
+                    .putInt("scroll_touch_size", Math.max(30, scrollTouchSeek.progress)) // Min 30
                     .apply()
                 
                 sendCommandToService("RELOAD_PREFS")
