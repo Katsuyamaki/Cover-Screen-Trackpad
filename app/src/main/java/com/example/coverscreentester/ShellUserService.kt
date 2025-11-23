@@ -50,9 +50,7 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    override fun injectTouch(action: Int, x: Float, y: Float, displayId: Int) {
-       // Not used
-    }
+    override fun injectTouch(action: Int, x: Float, y: Float, displayId: Int) { }
 
     override fun execClick(x: Float, y: Float, displayId: Int) {
         val downTime = SystemClock.uptimeMillis()
@@ -72,7 +70,6 @@ class ShellUserService : IShellService.Stub() {
         injectInternal(action, x, y, displayId, downTime, SystemClock.uptimeMillis(), source, buttonState)
     }
 
-    // 🚨 RESTORED: Key Injection
     override fun execKey(keyCode: Int) {
         val now = SystemClock.uptimeMillis()
         injectInternalKey(KeyEvent.ACTION_DOWN, keyCode, now)
@@ -80,11 +77,44 @@ class ShellUserService : IShellService.Stub() {
         injectInternalKey(KeyEvent.ACTION_UP, keyCode, SystemClock.uptimeMillis())
     }
 
-    private fun injectInternalKey(action: Int, keyCode: Int, eventTime: Long) {
+    override fun injectScroll(x: Float, y: Float, vDistance: Float, hDistance: Float, displayId: Int) {
         if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
         
+        val now = SystemClock.uptimeMillis()
+        val props = PointerProperties()
+        props.id = 0
+        props.toolType = MotionEvent.TOOL_TYPE_MOUSE
+
+        val coords = PointerCoords()
+        coords.x = x
+        coords.y = y
+        coords.pressure = 1.0f
+        coords.size = 1.0f
+        
+        coords.setAxisValue(MotionEvent.AXIS_VSCROLL, vDistance)
+        coords.setAxisValue(MotionEvent.AXIS_HSCROLL, hDistance)
+
+        var event: MotionEvent? = null
         try {
-            // Keys are injected to the default source (Keyboard)
+            event = MotionEvent.obtain(
+                now, now,
+                MotionEvent.ACTION_SCROLL,
+                1, arrayOf(props), arrayOf(coords),
+                0, 0, 1.0f, 1.0f, 0, 0, 
+                InputDevice.SOURCE_MOUSE, 0
+            )
+            setDisplayId(event, displayId)
+            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
+        } catch (e: Exception) {
+            Log.e(TAG, "Scroll Injection failed", e)
+        } finally {
+            event?.recycle()
+        }
+    }
+
+    private fun injectInternalKey(action: Int, keyCode: Int, eventTime: Long) {
+        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
+        try {
             val event = KeyEvent(eventTime, eventTime, action, keyCode, 0)
             injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
         } catch (e: Exception) {
@@ -94,35 +124,20 @@ class ShellUserService : IShellService.Stub() {
 
     private fun injectInternal(action: Int, x: Float, y: Float, displayId: Int, downTime: Long, eventTime: Long, source: Int, buttonState: Int) {
         if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
-
         val props = PointerProperties()
         props.id = 0
         props.toolType = if (source == InputDevice.SOURCE_MOUSE) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
-
         val coords = PointerCoords()
         coords.x = x
         coords.y = y
         coords.pressure = if (buttonState != 0 || action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) 1.0f else 0.0f
         coords.size = 1.0f
-
         var event: MotionEvent? = null
         try {
-            event = MotionEvent.obtain(
-                downTime,
-                eventTime,
-                action,
-                1, arrayOf(props), arrayOf(coords),
-                0, buttonState, 1.0f, 1.0f, 0, 0, 
-                source, 0
-            )
-            
+            event = MotionEvent.obtain(downTime, eventTime, action, 1, arrayOf(props), arrayOf(coords), 0, buttonState, 1.0f, 1.0f, 0, 0, source, 0)
             setDisplayId(event, displayId)
             injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
-        } catch (e: Exception) {
-            Log.e(TAG, "Injection failed", e)
-        } finally {
-            event?.recycle()
-        }
+        } catch (e: Exception) { Log.e(TAG, "Injection failed", e) } finally { event?.recycle() }
     }
 
     override fun runCommand(cmd: String?): String { return "" }

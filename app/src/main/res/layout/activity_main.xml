@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center"
-    android:padding="32dp"
+    android:padding="24dp"
     android:background="#121212">
 
     <TextView
@@ -14,7 +14,7 @@
         android:textSize="24sp"
         android:textStyle="bold"
         android:textColor="#FFFFFF"
-        android:layout_marginBottom="32dp"/>
+        android:layout_marginBottom="24dp"/>
 
     <TextView
         android:id="@+id/text_status"
@@ -27,11 +27,65 @@
     <Button
         android:id="@+id/btn_toggle"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
+        android:layout_height="50dp"
         android:text="Start Trackpad"
         android:backgroundTint="#3DDC84"
         android:textColor="#000000"
         android:textStyle="bold"
-        android:enabled="false"/>
+        android:layout_marginBottom="8dp"/>
+
+    <Button
+        android:id="@+id/btn_settings"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:text="Configuration / Settings"
+        android:backgroundTint="#444444"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="8dp"/>
+
+    <Button
+        android:id="@+id/btn_help"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:text="Help / Instructions"
+        android:backgroundTint="#0066CC"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="8dp"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="2"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btn_reset"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Reset Pos"
+            android:backgroundTint="#333333"
+            android:textSize="12sp"
+            android:layout_marginEnd="4dp"/>
+
+        <Button
+            android:id="@+id/btn_rotate"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Rotate"
+            android:backgroundTint="#333333"
+            android:textSize="12sp"
+            android:layout_marginStart="4dp"/>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btn_close"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:text="Close App"
+        android:backgroundTint="#990000"
+        android:textColor="#FFFFFF"/>
 
 </LinearLayout>

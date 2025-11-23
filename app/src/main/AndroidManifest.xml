@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="rikka.shizuku.ui" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -31,7 +36,9 @@
             android:name=".OverlayService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="overlay_input" />
+        </service>
 
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

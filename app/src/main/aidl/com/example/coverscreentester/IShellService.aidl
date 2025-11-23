@@ -9,6 +9,8 @@ interface IShellService {
 
     void injectMouse(int action, float x, float y, int displayId, int source, int buttonState, long downTime);
 
-    // 🚨 NEW: Generic key injection (for Voice, Back, Home, etc.)
     void execKey(int keyCode);
+
+    // 🚨 UPDATED: Supports Vertical AND Horizontal Scroll
+    void injectScroll(float x, float y, float vDistance, float hDistance, int displayId);
 }
