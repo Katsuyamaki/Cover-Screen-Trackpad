@@ -9,8 +9,6 @@ import android.view.MotionEvent
 import android.view.MotionEvent.PointerCoords
 import android.view.MotionEvent.PointerProperties
 import com.example.coverscreentester.IShellService
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.lang.reflect.Method
 
 class ShellUserService : IShellService.Stub() {
@@ -50,13 +48,13 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    override fun injectTouch(action: Int, x: Float, y: Float, displayId: Int) { }
+    // --- IMPLEMENTATION OF AIDL METHODS ---
 
     override fun execClick(x: Float, y: Float, displayId: Int) {
         val downTime = SystemClock.uptimeMillis()
-        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY)
         try { Thread.sleep(50) } catch (e: InterruptedException) {}
-        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_TOUCHSCREEN, 0)
+        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
     }
 
     override fun execRightClick(x: Float, y: Float, displayId: Int) {
@@ -68,13 +66,6 @@ class ShellUserService : IShellService.Stub() {
 
     override fun injectMouse(action: Int, x: Float, y: Float, displayId: Int, source: Int, buttonState: Int, downTime: Long) {
         injectInternal(action, x, y, displayId, downTime, SystemClock.uptimeMillis(), source, buttonState)
-    }
-
-    override fun execKey(keyCode: Int) {
-        val now = SystemClock.uptimeMillis()
-        injectInternalKey(KeyEvent.ACTION_DOWN, keyCode, now)
-        try { Thread.sleep(50) } catch (e: InterruptedException) {}
-        injectInternalKey(KeyEvent.ACTION_UP, keyCode, SystemClock.uptimeMillis())
     }
 
     override fun injectScroll(x: Float, y: Float, vDistance: Float, hDistance: Float, displayId: Int) {
@@ -112,15 +103,12 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    private fun injectInternalKey(action: Int, keyCode: Int, eventTime: Long) {
-        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
-        try {
-            val event = KeyEvent(eventTime, eventTime, action, keyCode, 0)
-            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
-        } catch (e: Exception) {
-            Log.e(TAG, "Key injection failed", e)
-        }
+    override fun runCommand(cmd: String?): String { 
+        // Simple implementation if needed, though we mostly use injection
+        return "" 
     }
+
+    // --- HELPER METHODS ---
 
     private fun injectInternal(action: Int, x: Float, y: Float, displayId: Int, downTime: Long, eventTime: Long, source: Int, buttonState: Int) {
         if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
@@ -139,6 +127,4 @@ class ShellUserService : IShellService.Stub() {
             injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
         } catch (e: Exception) { Log.e(TAG, "Injection failed", e) } finally { event?.recycle() }
     }
-
-    override fun runCommand(cmd: String?): String { return "" }
 }

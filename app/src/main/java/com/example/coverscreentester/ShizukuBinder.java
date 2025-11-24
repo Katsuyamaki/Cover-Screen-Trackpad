@@ -16,7 +16,6 @@ public class ShizukuBinder {
         Shizuku.bindUserService(args, connection);
     }
 
-    // FIXED: unbind now accepts ComponentName to reconstruct the required args
     public static void unbind(ComponentName component, ServiceConnection connection) {
         Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(component)
                 .processNameSuffix("shell")
