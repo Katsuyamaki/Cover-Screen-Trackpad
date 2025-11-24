@@ -6,8 +6,6 @@ import android.view.InputDevice
 import android.view.InputEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.MotionEvent.PointerCoords
-import android.view.MotionEvent.PointerProperties
 import com.example.coverscreentester.IShellService
 import java.lang.reflect.Method
 
@@ -39,16 +37,17 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    private fun setDisplayId(event: MotionEvent, displayId: Int) {
-        try {
-            val method = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-            method.invoke(event, displayId)
-        } catch (e: Exception) {
-            Log.e(TAG, "Could not set displayId", e)
+    // --- UPDATED: Use Shell Command for Keys ---
+    override fun injectKey(keyCode: Int, action: Int) {
+        // Only inject on DOWN to avoid double presses (the shell command does a full press/release cycle)
+        if (action == KeyEvent.ACTION_DOWN) {
+            try {
+                Runtime.getRuntime().exec("input keyevent $keyCode")
+            } catch (e: Exception) {
+                Log.e(TAG, "Key injection failed", e)
+            }
         }
     }
-
-    // --- IMPLEMENTATION OF AIDL METHODS ---
 
     override fun execClick(x: Float, y: Float, displayId: Int) {
         val downTime = SystemClock.uptimeMillis()
@@ -72,11 +71,11 @@ class ShellUserService : IShellService.Stub() {
         if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
         
         val now = SystemClock.uptimeMillis()
-        val props = PointerProperties()
+        val props = MotionEvent.PointerProperties()
         props.id = 0
         props.toolType = MotionEvent.TOOL_TYPE_MOUSE
 
-        val coords = PointerCoords()
+        val coords = MotionEvent.PointerCoords()
         coords.x = x
         coords.y = y
         coords.pressure = 1.0f
@@ -103,19 +102,21 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    override fun runCommand(cmd: String?): String { 
-        // Simple implementation if needed, though we mostly use injection
-        return "" 
-    }
+    override fun runCommand(cmd: String?): String { return "" }
 
-    // --- HELPER METHODS ---
+    private fun setDisplayId(event: MotionEvent, displayId: Int) {
+        try {
+            val method = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+            method.invoke(event, displayId)
+        } catch (e: Exception) {}
+    }
 
     private fun injectInternal(action: Int, x: Float, y: Float, displayId: Int, downTime: Long, eventTime: Long, source: Int, buttonState: Int) {
         if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
-        val props = PointerProperties()
+        val props = MotionEvent.PointerProperties()
         props.id = 0
         props.toolType = if (source == InputDevice.SOURCE_MOUSE) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
-        val coords = PointerCoords()
+        val coords = MotionEvent.PointerCoords()
         coords.x = x
         coords.y = y
         coords.pressure = if (buttonState != 0 || action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) 1.0f else 0.0f

@@ -8,6 +8,7 @@ import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 
 class SettingsActivity : Activity() {
 
@@ -18,71 +19,106 @@ class SettingsActivity : Activity() {
         val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
 
         // Views
-        val seekBarSpeed = findViewById<SeekBar>(R.id.seekBarSpeed)
-        val tvSpeedLabel = findViewById<TextView>(R.id.tvSpeedLabel)
+        val seekBarCursor = findViewById<SeekBar>(R.id.seekBarCursorSpeed)
+        val tvCursor = findViewById<TextView>(R.id.tvCursorSpeed)
+        val seekBarScroll = findViewById<SeekBar>(R.id.seekBarScrollSpeed)
+        val tvScroll = findViewById<TextView>(R.id.tvScrollSpeed)
         
-        val seekBarScrollSpeed = findViewById<SeekBar>(R.id.seekBarScrollSpeed)
-        val tvScrollSpeedLabel = findViewById<TextView>(R.id.tvScrollSpeedLabel)
-
-        val switchVerticalLeft = findViewById<Switch>(R.id.switchVerticalLeft)
-        val switchHorizontalTop = findViewById<Switch>(R.id.switchHorizontalTop)
-
+        val swVibrate = findViewById<Switch>(R.id.switchVibrate)
+        val swReverse = findViewById<Switch>(R.id.switchReverseScroll)
+        val swVPos = findViewById<Switch>(R.id.switchVPosLeft)
+        val swHPos = findViewById<Switch>(R.id.switchHPosTop)
+        
+        val seekAlpha = findViewById<SeekBar>(R.id.seekBarAlpha)
+        val seekHandleSize = findViewById<SeekBar>(R.id.seekBarHandleSize)
+        val seekScrollVisual = findViewById<SeekBar>(R.id.seekBarScrollVisual)
+        
+        val seekHandleTouch = findViewById<SeekBar>(R.id.seekBarHandleTouch)
+        val seekScrollTouch = findViewById<SeekBar>(R.id.seekBarScrollTouch)
+        
         val btnSave = findViewById<Button>(R.id.btnSave)
 
-        // Load Saved Values
-        val currentSpeed = prefs.getFloat("cursor_speed", 1.0f)
-        val progressSpeed = (currentSpeed * 10).toInt()
-        seekBarSpeed.progress = progressSpeed
-        tvSpeedLabel.text = "Cursor Speed: $currentSpeed"
+        // Load Values
+        val cSpeed = prefs.getFloat("cursor_speed", 2.5f)
+        seekBarCursor.progress = (cSpeed * 10).toInt()
+        tvCursor.text = "Cursor Speed: "
 
-        val currentScrollSpeed = prefs.getFloat("scroll_speed", 20.0f)
-        seekBarScrollSpeed.progress = currentScrollSpeed.toInt()
-        tvScrollSpeedLabel.text = "Scroll Speed: $currentScrollSpeed"
+        val sSpeed = prefs.getFloat("scroll_speed", 3.0f)
+        seekBarScroll.progress = (sSpeed * 10).toInt()
+        tvScroll.text = "Scroll Speed: "
 
-        val isVerticalLeft = prefs.getBoolean("vertical_left", false) 
-        switchVerticalLeft.isChecked = isVerticalLeft
-
-        val isHorizontalTop = prefs.getBoolean("horizontal_top", false)
-        switchHorizontalTop.isChecked = isHorizontalTop
+        swVibrate.isChecked = prefs.getBoolean("vibrate", true)
+        swReverse.isChecked = prefs.getBoolean("reverse_scroll", true)
+        swVPos.isChecked = prefs.getBoolean("v_pos_left", false)
+        swHPos.isChecked = prefs.getBoolean("h_pos_top", false)
+        
+        seekAlpha.progress = prefs.getInt("alpha", 200)
+        seekHandleSize.progress = prefs.getInt("handle_size", 60)
+        seekScrollVisual.progress = prefs.getInt("scroll_visual_size", 4)
+        seekHandleTouch.progress = prefs.getInt("handle_touch_size", 60)
+        seekScrollTouch.progress = prefs.getInt("scroll_touch_size", 60)
 
         // Listeners
-        seekBarSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val speed = if (progress < 1) 0.1f else progress / 10f
-                tvSpeedLabel.text = "Cursor Speed: $speed"
+        seekBarCursor.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) {
+                val speed = if (v < 1) 0.1f else v / 10f
+                tvCursor.text = "Cursor Speed: "
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
         })
 
-        seekBarScrollSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val sSpeed = if (progress < 1) 1f else progress.toFloat()
-                tvScrollSpeedLabel.text = "Scroll Speed: $sSpeed"
+        seekBarScroll.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) {
+                val speed = if (v < 1) 0.1f else v / 10f
+                tvScroll.text = "Scroll Speed: "
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {}
         })
+        
+        // Preview Listeners
+        seekAlpha.setOnSeekBarChangeListener(createPreviewListener("alpha"))
+        seekHandleSize.setOnSeekBarChangeListener(createPreviewListener("handle_size"))
+        seekScrollVisual.setOnSeekBarChangeListener(createPreviewListener("scroll_visual"))
+        seekHandleTouch.setOnSeekBarChangeListener(createPreviewListener("handle_touch"))
+        seekScrollTouch.setOnSeekBarChangeListener(createPreviewListener("scroll_touch"))
 
         btnSave.setOnClickListener {
-            val speed = if (seekBarSpeed.progress < 1) 0.1f else seekBarSpeed.progress / 10f
-            val sSpeed = if (seekBarScrollSpeed.progress < 1) 1f else seekBarScrollSpeed.progress.toFloat()
+            val cVal = if (seekBarCursor.progress < 1) 0.1f else seekBarCursor.progress / 10f
+            val sVal = if (seekBarScroll.progress < 1) 0.1f else seekBarScroll.progress / 10f
             
-            val vLeft = switchVerticalLeft.isChecked
-            val hTop = switchHorizontalTop.isChecked
+            prefs.edit()
+                .putFloat("cursor_speed", cVal)
+                .putFloat("scroll_speed", sVal)
+                .putBoolean("vibrate", swVibrate.isChecked)
+                .putBoolean("reverse_scroll", swReverse.isChecked)
+                .putBoolean("v_pos_left", swVPos.isChecked)
+                .putBoolean("h_pos_top", swHPos.isChecked)
+                .putInt("alpha", seekAlpha.progress)
+                .putInt("handle_size", seekHandleSize.progress)
+                .putInt("scroll_visual_size", seekScrollVisual.progress)
+                .putInt("handle_touch_size", seekHandleTouch.progress)
+                .putInt("scroll_touch_size", seekScrollTouch.progress)
+                .apply()
 
-            prefs.edit().apply {
-                putFloat("cursor_speed", speed)
-                putFloat("scroll_speed", sSpeed)
-                putBoolean("vertical_left", vLeft)
-                putBoolean("horizontal_top", hTop)
-                apply()
-            }
-
-            // Restart Service to apply changes
-            stopService(Intent(this, TrackpadService::class.java))
-            startService(Intent(this, TrackpadService::class.java))
+            // Reload
+            val intent = Intent(this, OverlayService::class.java)
+            intent.action = "RELOAD_PREFS"
+            startService(intent)
             finish()
         }
+    }
+    
+    private fun createPreviewListener(target: String) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) {
+            val intent = Intent(this@SettingsActivity, OverlayService::class.java)
+            intent.action = "PREVIEW_UPDATE"
+            intent.putExtra("TARGET", target)
+            intent.putExtra("VALUE", v)
+            startService(intent)
+        }
+        override fun onStartTrackingTouch(s: SeekBar) {}
+        override fun onStopTrackingTouch(s: SeekBar) {}
     }
 }

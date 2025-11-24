@@ -32,6 +32,11 @@
             </intent-filter>
         </activity>
 
+        <activity 
+            android:name=".SettingsActivity"
+            android:exported="false" 
+            android:theme="@style/Theme.CoverScreenTester" />
+
         <service
             android:name=".OverlayService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

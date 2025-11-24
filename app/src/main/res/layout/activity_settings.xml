@@ -2,103 +2,194 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
+    android:background="#121212"
     android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="20dp">
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Trackpad Settings"
+            android:text="Configuration"
             android:textColor="#FFFFFF"
             android:textSize="24sp"
-            android:layout_marginBottom="24dp"/>
+            android:textStyle="bold"
+            android:layout_marginBottom="20dp"/>
 
         <TextView
-            android:id="@+id/tvSpeedLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--- Input Speed ---"
+            android:textColor="#AAAAAA"
+            android:layout_gravity="center"
+            android:layout_marginBottom="10dp"/>
+
+        <TextView
+            android:id="@+id/tvCursorSpeed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Cursor Speed: 1.0"
+            android:text="Cursor Speed: 2.5"
             android:textColor="#FFFFFF"/>
         <SeekBar
-            android:id="@+id/seekBarSpeed"
+            android:id="@+id/seekBarCursorSpeed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:max="50"
-            android:progress="10"
+            android:max="100"
+            android:progress="25"
             android:layout_marginBottom="16dp"/>
 
         <TextView
-            android:id="@+id/tvScrollSpeedLabel"
+            android:id="@+id/tvScrollSpeed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Scroll Speed: 20.0"
+            android:text="Scroll Speed: 3.0"
             android:textColor="#FFFFFF"/>
         <SeekBar
             android:id="@+id/seekBarScrollSpeed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:max="100"
-            android:progress="20"
+            android:progress="30"
             android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--- Behavior ---"
+            android:textColor="#AAAAAA"
+            android:layout_gravity="center"
+            android:layout_marginBottom="10dp"/>
+
+        <Switch
+            android:id="@+id/switchVibrate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Haptic Feedback"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:minHeight="48dp"/>
+
+        <Switch
+            android:id="@+id/switchReverseScroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Natural Scrolling (Reverse)"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:minHeight="48dp"/>
+
+        <Switch
+            android:id="@+id/switchVPosLeft"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Vertical Scroll on Left"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:minHeight="48dp"/>
+
+        <Switch
+            android:id="@+id/switchHPosTop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Horizontal Scroll on Top"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:minHeight="48dp"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--- Visuals ---"
+            android:textColor="#AAAAAA"
+            android:layout_gravity="center"
+            android:layout_marginBottom="10dp"/>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Scrollbar Placement"
+            android:text="Border Visibility (Alpha)"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarAlpha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="255"
+            android:progress="200"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Handle Icon Size"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarHandleSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="60"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Scroll Bar Thickness (Visual)"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarScrollVisual"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="20"
+            android:progress="4"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="--- Touch Areas ---"
             android:textColor="#AAAAAA"
-            android:textSize="14sp"
-            android:layout_marginBottom="8dp"/>
+            android:layout_gravity="center"
+            android:layout_marginBottom="10dp"/>
 
-        <LinearLayout
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="12dp">
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Vertical Bar on Left"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp"/>
-            <Switch
-                android:id="@+id/switchVerticalLeft"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-        </LinearLayout>
-
-        <LinearLayout
+            android:text="Corner Handle Touch Area"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarHandleTouch"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="24dp">
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Horizontal Bar on Top"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp"/>
-            <Switch
-                android:id="@+id/switchHorizontalTop"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"/>
-        </LinearLayout>
+            android:max="150"
+            android:progress="60"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Scroll Bar Touch Width"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarScrollTouch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="150"
+            android:progress="60"
+            android:layout_marginBottom="24dp"/>
 
         <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Save &amp; Apply"
-            android:backgroundTint="#4CAF50"/>
+            android:backgroundTint="#3DDC84"
+            android:textColor="#000000"
+            android:textStyle="bold"/>
 
     </LinearLayout>
 </ScrollView>
