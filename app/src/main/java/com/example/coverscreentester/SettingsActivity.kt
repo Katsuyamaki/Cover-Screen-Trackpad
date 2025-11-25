@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.view.Gravity
-import android.view.ViewGroup
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Switch
@@ -17,14 +15,6 @@ class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
-
-        // FORCE WINDOW SIZE
-        try {
-            val dm = resources.displayMetrics
-            val targetWidth = (450 * dm.density).toInt().coerceAtMost(dm.widthPixels)
-            window.setLayout(targetWidth, ViewGroup.LayoutParams.MATCH_PARENT)
-            window.setGravity(Gravity.CENTER)
-        } catch (e: Exception) {}
 
         val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
 
@@ -47,6 +37,7 @@ class SettingsActivity : Activity() {
         val seekScrollTouch = findViewById<SeekBar>(R.id.seekBarScrollTouch)
         
         val btnSave = findViewById<Button>(R.id.btnSave)
+        val btnBack = findViewById<Button>(R.id.btnBack)
 
         // Load Values
         val cSpeed = prefs.getFloat("cursor_speed", 2.5f)
@@ -114,6 +105,8 @@ class SettingsActivity : Activity() {
             startService(intent)
             finish()
         }
+        
+        btnBack.setOnClickListener { finish() }
     }
     
     private fun createPreviewListener(target: String) = object : SeekBar.OnSeekBarChangeListener {

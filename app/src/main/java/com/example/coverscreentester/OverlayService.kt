@@ -246,6 +246,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                     "SAVE_LAYOUT" -> saveLayout()
                     "LOAD_LAYOUT" -> loadLayout()
                     "DELETE_PROFILE" -> deleteCurrentProfile()
+                    "MANUAL_ADJUST" -> handleManualAdjust(intent) // NEW
                     "RELOAD_PREFS" -> {
                         loadPrefs()
                         updateBorderColor(currentBorderColor)
@@ -267,6 +268,27 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             Log.e("OverlayService", "Crash in onStartCommand", e)
         }
         return START_STICKY
+    }
+    
+    private fun handleManualAdjust(intent: Intent) {
+        if (windowManager == null || trackpadLayout == null) return
+        
+        // Read deltas
+        val dx = intent.getIntExtra("DX", 0)
+        val dy = intent.getIntExtra("DY", 0)
+        val dw = intent.getIntExtra("DW", 0)
+        val dh = intent.getIntExtra("DH", 0)
+        
+        // Apply
+        trackpadParams.x += dx
+        trackpadParams.y += dy
+        trackpadParams.width = max(200, trackpadParams.width + dw)
+        trackpadParams.height = max(200, trackpadParams.height + dh)
+        
+        try {
+            windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
+            saveLayout() // Auto-save on manual adjust so it sticks
+        } catch (e: Exception) {}
     }
     
     private fun removeOverlays() {

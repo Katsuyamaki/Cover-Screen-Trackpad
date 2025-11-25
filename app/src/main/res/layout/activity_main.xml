@@ -64,6 +64,16 @@
             android:layout_marginBottom="8dp"/>
 
         <Button
+            android:id="@+id/btn_manual_adjust"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Manual Adjustment (Fine Tune)"
+            android:backgroundTint="#00ACC1"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
             android:id="@+id/btn_settings"
             android:layout_width="match_parent"
             android:layout_height="50dp"
@@ -79,35 +89,7 @@
             android:text="Help / Instructions"
             android:backgroundTint="#0066CC"
             android:textColor="#FFFFFF"
-            android:layout_marginBottom="8dp"/>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:weightSum="2"
-            android:layout_marginBottom="8dp">
-
-            <Button
-                android:id="@+id/btn_reset"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Reset Pos"
-                android:backgroundTint="#333333"
-                android:textSize="12sp"
-                android:layout_marginEnd="4dp"/>
-
-            <Button
-                android:id="@+id/btn_rotate"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Rotate"
-                android:backgroundTint="#333333"
-                android:textSize="12sp"
-                android:layout_marginStart="4dp"/>
-        </LinearLayout>
+            android:layout_marginBottom="24dp"/>
 
         <Button
             android:id="@+id/btn_close"

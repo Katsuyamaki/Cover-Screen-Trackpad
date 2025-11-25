@@ -22,9 +22,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var profilesButton: Button
     private lateinit var settingsButton: Button
     private lateinit var helpButton: Button
-    private lateinit var resetButton: Button
-    private lateinit var rotateButton: Button
     private lateinit var closeButton: Button
+    private lateinit var btnManualAdjust: Button
     
     private var lastKnownDisplayId = -1
 
@@ -38,9 +37,8 @@ class MainActivity : AppCompatActivity() {
         profilesButton = findViewById(R.id.btn_profiles)
         settingsButton = findViewById(R.id.btn_settings)
         helpButton = findViewById(R.id.btn_help)
-        resetButton = findViewById(R.id.btn_reset)
-        rotateButton = findViewById(R.id.btn_rotate)
         closeButton = findViewById(R.id.btn_close)
+        btnManualAdjust = findViewById(R.id.btn_manual_adjust)
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             Shizuku.requestPermission(0)
@@ -63,19 +61,42 @@ class MainActivity : AppCompatActivity() {
         profilesButton.setOnClickListener {
             startActivity(Intent(this, ProfilesActivity::class.java))
         }
+        
+        btnManualAdjust.setOnClickListener {
+            startActivity(Intent(this, ManualAdjustActivity::class.java))
+        }
 
         helpButton.setOnClickListener { showHelpDialog() }
         lockButton.setOnClickListener { toggleLock() }
-        resetButton.setOnClickListener { sendCommandToService("RESET_POSITION") }
-        rotateButton.setOnClickListener { sendCommandToService("ROTATE") }
 
         closeButton.setOnClickListener {
             finishAffinity()
             System.exit(0)
         }
 
+        if (savedInstanceState == null && isAccessibilityEnabled()) {
+            checkAndMoveDisplay()
+        }
+
         updateStatusUI()
         updateLockUI()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateStatusUI()
+        updateLockUI()
+        if (isAccessibilityEnabled()) {
+            checkAndMoveDisplay()
+        }
+    }
+
+    private fun checkAndMoveDisplay() {
+        val currentDisplayId = display?.displayId ?: android.view.Display.DEFAULT_DISPLAY
+        if (currentDisplayId != lastKnownDisplayId) {
+            lastKnownDisplayId = currentDisplayId
+            forceMoveCommand()
+        }
     }
 
     private fun forceMoveCommand() {
@@ -83,16 +104,6 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, OverlayService::class.java)
         intent.putExtra("DISPLAY_ID", currentDisplayId)
         startService(intent)
-    }
-
-    private fun sendCommandToService(action: String) {
-        if (isAccessibilityEnabled()) {
-            val intent = Intent(this, OverlayService::class.java)
-            intent.action = action
-            startService(intent)
-        } else {
-            Toast.makeText(this, "Service not running", Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun updateStatusUI() {
@@ -124,7 +135,9 @@ class MainActivity : AppCompatActivity() {
         val current = prefs.getBoolean("lock_position", false)
         prefs.edit().putBoolean("lock_position", !current).apply()
         updateLockUI()
-        sendCommandToService("RELOAD_PREFS")
+        val intent = Intent(this, OverlayService::class.java)
+        intent.action = "RELOAD_PREFS"
+        startService(intent)
     }
 
     private fun updateLockUI() {
@@ -146,7 +159,20 @@ class MainActivity : AppCompatActivity() {
         val text = TextView(this)
         text.setPadding(50, 40, 50, 40)
         text.textSize = 16f
-        text.text = "Trackpad Setup:\n1. Enable Shizuku\n2. Enable Accessibility\n3. Click Move Trackpad Here"
-        AlertDialog.Builder(this).setView(text).setPositiveButton("OK", null).show()
+        text.text = """
+            == SETUP ==
+            1. Start Shizuku.
+            2. Enable Service.
+            
+            == CONTROLS ==
+            • Use Manual Adjust for fine tuning.
+            • Click Center Button in Manual Adjust to reset.
+        """.trimIndent()
+
+        AlertDialog.Builder(this)
+            .setTitle("Instructions")
+            .setView(text)
+            .setPositiveButton("Got it", null)
+            .show()
     }
 }

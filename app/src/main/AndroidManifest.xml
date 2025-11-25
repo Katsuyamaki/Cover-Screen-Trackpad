@@ -33,6 +33,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            
             <meta-data android:name="android.max_aspect" android:value="4.0" />
         </activity>
 
@@ -43,6 +44,11 @@
 
         <activity 
             android:name=".ProfilesActivity"
+            android:exported="false" 
+            android:theme="@style/Theme.CoverScreenTester" />
+
+        <activity 
+            android:name=".ManualAdjustActivity"
             android:exported="false" 
             android:theme="@style/Theme.CoverScreenTester" />
 
@@ -59,7 +65,7 @@
                 <action android:name="LOAD_LAYOUT" />
                 <action android:name="RELOAD_PREFS" />
                 <action android:name="DELETE_PROFILE" />
-            </intent-filter>
+                <action android:name="MANUAL_ADJUST" /> </intent-filter>
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
