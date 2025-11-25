@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Switch
@@ -15,6 +17,14 @@ class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
+
+        // FORCE WINDOW SIZE
+        try {
+            val dm = resources.displayMetrics
+            val targetWidth = (450 * dm.density).toInt().coerceAtMost(dm.widthPixels)
+            window.setLayout(targetWidth, ViewGroup.LayoutParams.MATCH_PARENT)
+            window.setGravity(Gravity.CENTER)
+        } catch (e: Exception) {}
 
         val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
 
@@ -61,7 +71,6 @@ class SettingsActivity : Activity() {
         // Listeners
         seekBarCursor.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) {
-                val speed = if (v < 1) 0.1f else v / 10f
                 tvCursor.text = "Cursor Speed: "
             }
             override fun onStartTrackingTouch(s: SeekBar) {}
@@ -70,14 +79,12 @@ class SettingsActivity : Activity() {
 
         seekBarScroll.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, v: Int, f: Boolean) {
-                val speed = if (v < 1) 0.1f else v / 10f
                 tvScroll.text = "Scroll Speed: "
             }
             override fun onStartTrackingTouch(s: SeekBar) {}
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
         
-        // Preview Listeners
         seekAlpha.setOnSeekBarChangeListener(createPreviewListener("alpha"))
         seekHandleSize.setOnSeekBarChangeListener(createPreviewListener("handle_size"))
         seekScrollVisual.setOnSeekBarChangeListener(createPreviewListener("scroll_visual"))
@@ -102,7 +109,6 @@ class SettingsActivity : Activity() {
                 .putInt("scroll_touch_size", seekScrollTouch.progress)
                 .apply()
 
-            // Reload
             val intent = Intent(this, OverlayService::class.java)
             intent.action = "RELOAD_PREFS"
             startService(intent)

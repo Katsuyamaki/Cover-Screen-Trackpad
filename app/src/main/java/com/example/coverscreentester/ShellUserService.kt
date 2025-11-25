@@ -11,13 +11,12 @@ import java.lang.reflect.Method
 
 class ShellUserService : IShellService.Stub() {
 
-    private lateinit var TAG: String
+    private val TAG = "ShellUserService"
     private lateinit var inputManager: Any
     private lateinit var injectInputEventMethod: Method
     private val INJECT_MODE_ASYNC = 0
 
     init {
-        TAG = "ShellUserService"
         setupReflection()
     }
 
@@ -37,12 +36,40 @@ class ShellUserService : IShellService.Stub() {
         }
     }
 
-    // --- UPDATED: Use Shell Command for Keys ---
+    // --- WINDOW MANAGEMENT ---
+    
+    override fun setWindowingMode(taskId: Int, mode: Int) {
+        try {
+            // Mode 5 = Freeform, 1 = Fullscreen
+            Runtime.getRuntime().exec("am task set-windowing-mode  ").waitFor()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set window mode", e)
+        }
+    }
+
+    override fun resizeTask(taskId: Int, left: Int, top: Int, right: Int, bottom: Int) {
+        try {
+            Runtime.getRuntime().exec("am task resize     ")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to resize task", e)
+        }
+    }
+
+    override fun runCommand(cmd: String?): String {
+        try {
+            if (cmd != null) {
+                Runtime.getRuntime().exec(cmd)
+            }
+        } catch (e: Exception) {}
+        return "" 
+    }
+
+    // --- INPUT INJECTION (Existing) ---
+
     override fun injectKey(keyCode: Int, action: Int) {
-        // Only inject on DOWN to avoid double presses (the shell command does a full press/release cycle)
         if (action == KeyEvent.ACTION_DOWN) {
             try {
-                Runtime.getRuntime().exec("input keyevent $keyCode")
+                Runtime.getRuntime().exec("input keyevent ")
             } catch (e: Exception) {
                 Log.e(TAG, "Key injection failed", e)
             }
@@ -101,8 +128,6 @@ class ShellUserService : IShellService.Stub() {
             event?.recycle()
         }
     }
-
-    override fun runCommand(cmd: String?): String { return "" }
 
     private fun setDisplayId(event: MotionEvent, displayId: Int) {
         try {
