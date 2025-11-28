@@ -55,7 +55,6 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var cursorView: ImageView? = null
     private lateinit var cursorParams: WindowManager.LayoutParams
     
-    // NEW: Hidden Input Bridge
     private var hiddenInput: EditText? = null
     
     private var remoteWindowManager: WindowManager? = null
@@ -228,26 +227,18 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         try {
             if (displayManager == null) displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
             val display = displayManager?.getDisplay(displayId)
-            
             if (display == null) {
-                targetScreenWidth = 1920
-                targetScreenHeight = 1080
-                return
+                targetScreenWidth = 1920; targetScreenHeight = 1080; return
             }
-            
             val metrics = android.util.DisplayMetrics()
             display.getRealMetrics(metrics)
-            
             if (metrics.widthPixels > 0) {
-                targetScreenWidth = metrics.widthPixels
-                targetScreenHeight = metrics.heightPixels
+                targetScreenWidth = metrics.widthPixels; targetScreenHeight = metrics.heightPixels
             } else {
-                targetScreenWidth = 1920
-                targetScreenHeight = 1080
+                targetScreenWidth = 1920; targetScreenHeight = 1080
             }
         } catch (e: Exception) { 
-            targetScreenWidth = 1920
-            targetScreenHeight = 1080
+            targetScreenWidth = 1920; targetScreenHeight = 1080
         }
     }
 
@@ -277,11 +268,9 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         return START_STICKY
     }
     
-    // --- KEYBOARD TOGGLE WITH BRIDGE ---
     private fun toggleKeyboard() {
         try {
             if (inputTargetDisplayId != currentDisplayId) {
-                // Bridge Mode: Focus hidden input to show keyboard locally
                 if (hiddenInput != null) {
                     // Update flags to allow focus
                     trackpadParams.flags = trackpadParams.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv() 
@@ -294,7 +283,6 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                     showToast("Keyboard Bridge Active")
                 }
             } else {
-                // Local Mode: Standard Toggle
                 val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
             }
@@ -303,7 +291,6 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         }
     }
     
-    // Helper to send keys to remote display
     private fun bridgeKey(c: Char) {
         val kcm = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
         val events = kcm.getEvents(charArrayOf(c))
@@ -345,6 +332,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             cursorParams.gravity = Gravity.TOP or Gravity.LEFT; cursorX = uiScreenWidth / 2f; cursorY = uiScreenHeight / 2f; cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt()
             windowManager?.addView(cursorLayout, cursorParams)
 
+            // REVERTED TO TYPE_ACCESSIBILITY_OVERLAY
             trackpadLayout = object : FrameLayout(displayContext) {}; val bg = GradientDrawable(); bg.cornerRadius = 30f; trackpadLayout?.background = bg; updateBorderColor(0x55FFFFFF.toInt()); trackpadLayout?.isFocusable = true; trackpadLayout?.isFocusableInTouchMode = true
             handleContainers.clear(); handleVisuals.clear(); val handleColor = 0x15FFFFFF.toInt()
             addHandle(displayContext, Gravity.TOP or Gravity.RIGHT, handleColor) { v, e -> moveWindow(e) }
@@ -353,25 +341,47 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             addHandle(displayContext, Gravity.TOP or Gravity.LEFT, handleColor) { v, e -> voiceWindow(e) }
             addScrollBars(displayContext)
             
-            // --- NEW: Hidden Input Bridge ---
+            // --- HIDDEN INPUT BRIDGE ---
             hiddenInput = EditText(displayContext)
             hiddenInput?.setBackgroundColor(Color.TRANSPARENT)
             hiddenInput?.setTextColor(Color.TRANSPARENT)
-            hiddenInput?.layoutParams = FrameLayout.LayoutParams(1, 1)
+            hiddenInput?.layoutParams = FrameLayout.LayoutParams(10, 10)
             hiddenInput?.isFocusable = true
             hiddenInput?.isFocusableInTouchMode = true
             hiddenInput?.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             
+            // DEBUG FOCUS
+            hiddenInput?.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) showToast("Input FOCUSED") 
+                else if (inputTargetDisplayId != currentDisplayId) {
+                    showToast("Input LOST FOCUS - Reclaiming")
+                    handler.post { hiddenInput?.requestFocus() }
+                }
+            }
+            
             hiddenInput?.addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    if (s.isNullOrEmpty()) return
-                    if (inputTargetDisplayId != currentDisplayId) {
-                        val chars = s.toString().toCharArray()
-                        for (c in chars) { bridgeKey(c) }
+                
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    if (count > 0 && inputTargetDisplayId != currentDisplayId) {
+                        val charToAdd = s?.get(start)
+                        if (charToAdd != null) {
+                            bridgeKey(charToAdd)
+                            showToast("Bridged: ")
+                        }
                     }
-                    s.clear()
+                }
+                
+                override fun afterTextChanged(s: Editable?) {
+                    // DO NOT CLEAR immediately to avoid IME close
+                    if (s != null && s.length > 1000) { s.clear() }
+                    
+                    // RE-ASSERT KEYBOARD
+                    handler.post {
+                        hiddenInput?.requestFocus()
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showSoftInput(hiddenInput, InputMethodManager.SHOW_FORCED)
+                    }
                 }
             })
             
