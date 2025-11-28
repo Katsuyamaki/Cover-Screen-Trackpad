@@ -36,10 +36,14 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import android.widget.Button
 import kotlin.math.abs
 import kotlin.math.max
 import java.util.ArrayList
@@ -55,7 +59,12 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var cursorView: ImageView? = null
     private lateinit var cursorParams: WindowManager.LayoutParams
     
-    private var hiddenInput: EditText? = null
+    // --- DEDICATED TYPING BRIDGE ---
+    private var typingBridgeLayout: LinearLayout? = null
+    private var typingInput: EditText? = null
+    private var chkRealTime: CheckBox? = null
+    private lateinit var typingParams: WindowManager.LayoutParams
+    private var isTypingMode = false
     
     private var remoteWindowManager: WindowManager? = null
     private var remoteCursorLayout: FrameLayout? = null
@@ -151,7 +160,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 "CYCLE_INPUT_TARGET" -> cycleInputTarget()
                 "RESET_CURSOR" -> resetCursorCenter()
                 "TOGGLE_DEBUG" -> toggleDebugMode()
-                "FORCE_KEYBOARD" -> toggleKeyboard()
+                "FORCE_KEYBOARD" -> toggleKeyboardBridge()
             }
         }
     }
@@ -160,6 +169,8 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     override fun onInterrupt() {}
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (isTypingMode) return false // Pass keys to bridge if open
+
         val action = event.action; val keyCode = event.keyCode
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             if (action == KeyEvent.ACTION_DOWN) { if (!isLeftKeyHeld) { isLeftKeyHeld = true; startKeyDrag(MotionEvent.BUTTON_PRIMARY) } } else if (action == KeyEvent.ACTION_UP) { isLeftKeyHeld = false; stopKeyDrag(MotionEvent.BUTTON_PRIMARY) }; return true 
@@ -238,7 +249,8 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 targetScreenWidth = 1920; targetScreenHeight = 1080
             }
         } catch (e: Exception) { 
-            targetScreenWidth = 1920; targetScreenHeight = 1080
+            targetScreenWidth = 1920
+            targetScreenHeight = 1080
         }
     }
 
@@ -257,7 +269,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                     "CYCLE_INPUT_TARGET" -> cycleInputTarget()
                     "RESET_CURSOR" -> resetCursorCenter()
                     "TOGGLE_DEBUG" -> toggleDebugMode()
-                    "FORCE_KEYBOARD" -> toggleKeyboard()
+                    "FORCE_KEYBOARD" -> toggleKeyboardBridge()
                 }
             }
             if (intent?.hasExtra("DISPLAY_ID") == true) {
@@ -268,49 +280,193 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         return START_STICKY
     }
     
-    private fun toggleKeyboard() {
+    // --- BUFFERED KEYBOARD BRIDGE ---
+    private fun toggleKeyboardBridge() {
+        if (isTypingMode) {
+            removeTypingBridge()
+        } else {
+            createTypingBridge()
+        }
+    }
+    
+    private fun createTypingBridge() {
+        if (windowManager == null) return
         try {
-            if (inputTargetDisplayId != currentDisplayId) {
-                if (hiddenInput != null) {
-                    // Update flags to allow focus
-                    trackpadParams.flags = trackpadParams.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv() 
-                    windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
-                    
-                    hiddenInput?.requestFocus()
-                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    imm.showSoftInput(hiddenInput, InputMethodManager.SHOW_FORCED)
-                    
-                    showToast("Keyboard Bridge Active")
-                }
-            } else {
-                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+            val ctx = if (displayManager != null) {
+                createDisplayContext(displayManager!!.getDisplay(currentDisplayId))
+            } else this
+            
+            typingBridgeLayout = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(0xFF222222.toInt())
+                setPadding(16, 16, 16, 16)
             }
+            
+            // Header Row
+            val headerRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val header = TextView(ctx).apply {
+                text = "Target: Display $inputTargetDisplayId"
+                setTextColor(Color.WHITE)
+                textSize = 12f
+            }
+            
+            // Real-time Checkbox (Optional Mode)
+            chkRealTime = CheckBox(ctx).apply {
+                text = "Real-time"
+                setTextColor(Color.LTGRAY)
+                textSize = 12f
+                isChecked = false // Default OFF to prevent keyboard closing
+            }
+            
+            headerRow.addView(header, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            headerRow.addView(chkRealTime)
+            typingBridgeLayout?.addView(headerRow)
+            
+            // Input Field
+            typingInput = EditText(ctx).apply {
+                hint = "Type here..."
+                setTextColor(Color.WHITE)
+                setHintTextColor(Color.GRAY)
+                setBackgroundColor(0xFF333333.toInt())
+                setPadding(10,10,10,10)
+                minHeight = 120
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        if (chkRealTime?.isChecked == true && count > 0 && inputTargetDisplayId != currentDisplayId) {
+                            val charToAdd = s?.get(start)
+                            if (charToAdd != null) {
+                                bridgeKey(charToAdd)
+                            }
+                        }
+                    }
+                    override fun afterTextChanged(s: Editable?) {
+                        // If real-time is on, clear to keep buffer small. 
+                        // If off (Buffered), keep text until Send.
+                        if (chkRealTime?.isChecked == true && s != null && s.length > 1) s.clear()
+                    }
+                })
+                
+                // Handle Enter Key for Quick Send
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
+                        sendTextBuffer()
+                        return@setOnKeyListener true
+                    }
+                    false
+                }
+            }
+            typingBridgeLayout?.addView(typingInput)
+            
+            // Button Row
+            val btnRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 10, 0, 0)
+            }
+            
+            val sendBtn = Button(ctx).apply {
+                text = "SEND TEXT"
+                setBackgroundColor(Color.parseColor("#3DDC84"))
+                setTextColor(Color.BLACK)
+                setOnClickListener { sendTextBuffer() }
+            }
+            
+            val closeBtn = Button(ctx).apply {
+                text = "Close"
+                setBackgroundColor(Color.parseColor("#555555"))
+                setTextColor(Color.WHITE)
+                setOnClickListener { removeTypingBridge() }
+            }
+            
+            btnRow.addView(sendBtn, LinearLayout.LayoutParams(0, 120, 2f))
+            btnRow.addView(View(ctx), LinearLayout.LayoutParams(10, 10)) // Spacer
+            btnRow.addView(closeBtn, LinearLayout.LayoutParams(0, 120, 1f))
+            typingBridgeLayout?.addView(btnRow)
+            
+            // Params: APPLICATION_OVERLAY to hold focus better
+            typingParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, // Try App Overlay
+                0, // Focusable
+                PixelFormat.TRANSLUCENT
+            )
+            typingParams.gravity = Gravity.BOTTOM
+            typingParams.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            
+            windowManager?.addView(typingBridgeLayout, typingParams)
+            isTypingMode = true
+            
+            // Focus and Show
+            handler.postDelayed({
+                typingInput?.requestFocus()
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.showSoftInput(typingInput, InputMethodManager.SHOW_IMPLICIT)
+            }, 100)
+            
         } catch (e: Exception) {
-            Log.e("OverlayService", "Failed to toggle keyboard", e)
+            Log.e("OverlayService", "Failed to create typing bridge", e)
+            // Fallback to Accessibility Overlay if App Overlay fails permissions
+            typingParams.type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            try { windowManager?.addView(typingBridgeLayout, typingParams); isTypingMode = true } catch(e2: Exception) {}
+        }
+    }
+    
+    private fun removeTypingBridge() {
+        if (typingBridgeLayout != null && windowManager != null) {
+            try { windowManager?.removeView(typingBridgeLayout) } catch (e: Exception) {}
+        }
+        typingBridgeLayout = null; typingInput = null; isTypingMode = false
+    }
+    
+    private fun sendTextBuffer() {
+        val text = typingInput?.text?.toString() ?: ""
+        if (text.isNotEmpty()) {
+            Thread {
+                val chars = text.toCharArray()
+                for (c in chars) {
+                    bridgeKeySync(c)
+                    SystemClock.sleep(10) // Slight delay to ensure order
+                }
+                // Optional: Send Enter after
+                // shellService?.injectKeyOnDisplay(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_DOWN, inputTargetDisplayId)
+                // shellService?.injectKeyOnDisplay(KeyEvent.KEYCODE_ENTER, KeyEvent.ACTION_UP, inputTargetDisplayId)
+            }.start()
+            
+            // Clear local buffer
+            typingInput?.setText("")
+            showToast("Sent to Display ")
         }
     }
     
     private fun bridgeKey(c: Char) {
+        // Async
+        Thread { bridgeKeySync(c) }.start()
+    }
+    
+    private fun bridgeKeySync(c: Char) {
         val kcm = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
         val events = kcm.getEvents(charArrayOf(c))
         if (events != null && shellService != null) {
-            Thread {
-                for (e in events) {
-                    if (e.action == KeyEvent.ACTION_DOWN) {
-                        shellService?.injectKeyOnDisplay(e.keyCode, KeyEvent.ACTION_DOWN, inputTargetDisplayId)
-                    } else if (e.action == KeyEvent.ACTION_UP) {
-                        shellService?.injectKeyOnDisplay(e.keyCode, KeyEvent.ACTION_UP, inputTargetDisplayId)
-                    }
+            for (e in events) {
+                if (e.action == KeyEvent.ACTION_DOWN) {
+                    shellService?.injectKeyOnDisplay(e.keyCode, KeyEvent.ACTION_DOWN, inputTargetDisplayId)
+                } else if (e.action == KeyEvent.ACTION_UP) {
+                    shellService?.injectKeyOnDisplay(e.keyCode, KeyEvent.ACTION_UP, inputTargetDisplayId)
                 }
-            }.start()
+            }
         }
     }
 
     private fun toggleDebugMode() { isDebugMode = !isDebugMode; if (isDebugMode) { showToast("Debug ON. Lift finger for info."); updateBorderColor(0xFFFFFF00.toInt()) } else { showToast("Debug OFF"); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } }
     private fun resetCursorCenter() { cursorX = (targetScreenWidth / 2).toFloat(); cursorY = (targetScreenHeight / 2).toFloat(); injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis()); if (inputTargetDisplayId == currentDisplayId) { cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch(e: Exception) {} } else { remoteCursorParams.x = cursorX.toInt(); remoteCursorParams.y = cursorY.toInt(); try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} }; showToast("Reset to ${cursorX.toInt()}x${cursorY.toInt()} on Display $inputTargetDisplayId"); vibrate() }
     private fun handleManualAdjust(intent: Intent) { if (windowManager == null || trackpadLayout == null) return; val dx = intent.getIntExtra("DX", 0); val dy = intent.getIntExtra("DY", 0); val dw = intent.getIntExtra("DW", 0); val dh = intent.getIntExtra("DH", 0); trackpadParams.x += dx; trackpadParams.y += dy; trackpadParams.width = max(200, trackpadParams.width + dw); trackpadParams.height = max(200, trackpadParams.height + dh); try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); saveLayout() } catch (e: Exception) {} }
-    private fun removeOverlays() { try { if (trackpadLayout != null) { windowManager?.removeView(trackpadLayout); trackpadLayout = null }; if (cursorLayout != null) { windowManager?.removeView(cursorLayout); cursorLayout = null }; removeRemoteCursor() } catch (e: Exception) {} }
+    private fun removeOverlays() { try { if (trackpadLayout != null) { windowManager?.removeView(trackpadLayout); trackpadLayout = null }; if (cursorLayout != null) { windowManager?.removeView(cursorLayout); cursorLayout = null }; removeRemoteCursor(); removeTypingBridge() } catch (e: Exception) {} }
 
     private fun setupWindows(displayId: Int) {
         if (trackpadLayout != null && displayId == currentDisplayId) return
@@ -332,7 +488,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             cursorParams.gravity = Gravity.TOP or Gravity.LEFT; cursorX = uiScreenWidth / 2f; cursorY = uiScreenHeight / 2f; cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt()
             windowManager?.addView(cursorLayout, cursorParams)
 
-            // REVERTED TO TYPE_ACCESSIBILITY_OVERLAY
+            // Reverted to TYPE_ACCESSIBILITY_OVERLAY
             trackpadLayout = object : FrameLayout(displayContext) {}; val bg = GradientDrawable(); bg.cornerRadius = 30f; trackpadLayout?.background = bg; updateBorderColor(0x55FFFFFF.toInt()); trackpadLayout?.isFocusable = true; trackpadLayout?.isFocusableInTouchMode = true
             handleContainers.clear(); handleVisuals.clear(); val handleColor = 0x15FFFFFF.toInt()
             addHandle(displayContext, Gravity.TOP or Gravity.RIGHT, handleColor) { v, e -> moveWindow(e) }
@@ -341,60 +497,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             addHandle(displayContext, Gravity.TOP or Gravity.LEFT, handleColor) { v, e -> voiceWindow(e) }
             addScrollBars(displayContext)
             
-            // --- HIDDEN INPUT BRIDGE ---
-            hiddenInput = EditText(displayContext)
-            hiddenInput?.setBackgroundColor(Color.TRANSPARENT)
-            hiddenInput?.setTextColor(Color.TRANSPARENT)
-            hiddenInput?.layoutParams = FrameLayout.LayoutParams(10, 10)
-            hiddenInput?.isFocusable = true
-            hiddenInput?.isFocusableInTouchMode = true
-            hiddenInput?.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            
-            // DEBUG FOCUS
-            hiddenInput?.setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) showToast("Input FOCUSED") 
-                else if (inputTargetDisplayId != currentDisplayId) {
-                    showToast("Input LOST FOCUS - Reclaiming")
-                    handler.post { hiddenInput?.requestFocus() }
-                }
-            }
-            
-            hiddenInput?.addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    if (count > 0 && inputTargetDisplayId != currentDisplayId) {
-                        val charToAdd = s?.get(start)
-                        if (charToAdd != null) {
-                            bridgeKey(charToAdd)
-                            showToast("Bridged: ")
-                        }
-                    }
-                }
-                
-                override fun afterTextChanged(s: Editable?) {
-                    // DO NOT CLEAR immediately to avoid IME close
-                    if (s != null && s.length > 1000) { s.clear() }
-                    
-                    // RE-ASSERT KEYBOARD
-                    handler.post {
-                        hiddenInput?.requestFocus()
-                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                        imm.showSoftInput(hiddenInput, InputMethodManager.SHOW_FORCED)
-                    }
-                }
-            })
-            
-            hiddenInput?.setOnKeyListener { _, keyCode, event ->
-                if (inputTargetDisplayId != currentDisplayId && event.action == KeyEvent.ACTION_DOWN) {
-                    if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_ENTER) {
-                        Thread { shellService?.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_DOWN, inputTargetDisplayId); shellService?.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_UP, inputTargetDisplayId) }.start()
-                    }
-                }
-                false
-            }
-            trackpadLayout?.addView(hiddenInput)
-            // --------------------------------
+            // REMOVED HIDDEN INPUT FROM TRACKPAD
 
             trackpadParams = WindowManager.LayoutParams(400, 300, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT)
             trackpadParams.gravity = Gravity.TOP or Gravity.LEFT; trackpadParams.title = "TrackpadInput"; resetTrackpadPosition()
@@ -432,7 +535,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private fun vibrate() { if (!prefVibrate) return; val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator; if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(50) }
     private fun bindShizuku() { try { val c = ComponentName(packageName, ShellUserService::class.java.name); ShizukuBinder.bind(c, userServiceConnection, BuildConfig.DEBUG, BuildConfig.VERSION_CODE) } catch (e: Exception) {} }
     private fun createNotification() { val c = NotificationChannel("overlay_service", "Trackpad Active", NotificationManager.IMPORTANCE_LOW); (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(c); val n = Notification.Builder(this, "overlay_service").setContentTitle("Trackpad Active").setSmallIcon(R.mipmap.ic_launcher).build(); if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(1, n) }
-    override fun onDestroy() { super.onDestroy(); try { unregisterReceiver(switchReceiver) } catch(e: Exception) {}; displayManager?.unregisterDisplayListener(this); if (trackpadLayout != null) windowManager?.removeView(trackpadLayout); if (cursorLayout != null) windowManager?.removeView(cursorLayout); removeRemoteCursor(); if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) }
+    override fun onDestroy() { super.onDestroy(); try { unregisterReceiver(switchReceiver) } catch(e: Exception) {}; displayManager?.unregisterDisplayListener(this); if (trackpadLayout != null) windowManager?.removeView(trackpadLayout); if (cursorLayout != null) windowManager?.removeView(cursorLayout); removeRemoteCursor(); removeTypingBridge(); if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) }
     private fun toggleKeyboardMode() { vibrate(); isRightDragPending = false; if (!isKeyboardMode) { isKeyboardMode = true; savedWindowX = trackpadParams.x; savedWindowY = trackpadParams.y; trackpadParams.x = uiScreenWidth - trackpadParams.width; trackpadParams.y = 0; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(0xFFFF0000.toInt()) } else { isKeyboardMode = false; trackpadParams.x = savedWindowX; trackpadParams.y = savedWindowY; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(currentBorderColor) } }
     private fun openMenuHandle(event: MotionEvent): Boolean { if (event.action == MotionEvent.ACTION_DOWN) { vibrate(); val intent = Intent(this, MainActivity::class.java).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }; startActivity(intent); return true }; return false }
     private fun voiceWindow(event: MotionEvent): Boolean { if(event.action == MotionEvent.ACTION_DOWN) { handler.postDelayed(voiceRunnable, 1000); return true } else if (event.action == MotionEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if(!isKeyboardMode) updateBorderColor(currentBorderColor); return true }; return false }
