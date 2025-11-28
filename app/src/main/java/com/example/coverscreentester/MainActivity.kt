@@ -24,6 +24,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var helpButton: Button
     private lateinit var closeButton: Button
     private lateinit var btnManualAdjust: Button
+    private lateinit var btnTargetSwitch: Button
+    private lateinit var btnResetCursor: Button
+    private lateinit var btnDebugMode: Button
     
     private var lastKnownDisplayId = -1
 
@@ -39,6 +42,27 @@ class MainActivity : AppCompatActivity() {
         helpButton = findViewById(R.id.btn_help)
         closeButton = findViewById(R.id.btn_close)
         btnManualAdjust = findViewById(R.id.btn_manual_adjust)
+        
+        btnTargetSwitch = findViewById(R.id.btn_target_switch)
+        btnTargetSwitch.setOnClickListener {
+            val intent = Intent("CYCLE_INPUT_TARGET")
+            intent.setPackage(packageName) 
+            sendBroadcast(intent)
+        }
+        
+        btnResetCursor = findViewById(R.id.btn_reset_cursor)
+        btnResetCursor.setOnClickListener {
+            val intent = Intent("RESET_CURSOR")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        }
+        
+        btnDebugMode = findViewById(R.id.btn_debug_mode)
+        btnDebugMode.setOnClickListener {
+            val intent = Intent("TOGGLE_DEBUG")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        }
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             Shizuku.requestPermission(0)
@@ -160,13 +184,11 @@ class MainActivity : AppCompatActivity() {
         text.setPadding(50, 40, 50, 40)
         text.textSize = 16f
         text.text = """
-            == SETUP ==
-            1. Start Shizuku.
-            2. Enable Service.
+            == DEBUG MODE ==
+            Enable to see cursor coordinates when you lift your finger.
             
-            == CONTROLS ==
-            • Use Manual Adjust for fine tuning.
-            • Click Center Button in Manual Adjust to reset.
+            == RESET CURSOR ==
+            Forces cursor to center of the target screen.
         """.trimIndent()
 
         AlertDialog.Builder(this)
