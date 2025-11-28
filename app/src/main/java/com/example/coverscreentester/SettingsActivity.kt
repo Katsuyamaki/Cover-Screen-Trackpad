@@ -29,6 +29,7 @@ class SettingsActivity : Activity() {
         val swVPos = findViewById<Switch>(R.id.switchVPosLeft)
         val swHPos = findViewById<Switch>(R.id.switchHPosTop)
         
+        val seekCursorSize = findViewById<SeekBar>(R.id.seekBarCursorSize)
         val seekAlpha = findViewById<SeekBar>(R.id.seekBarAlpha)
         val seekHandleSize = findViewById<SeekBar>(R.id.seekBarHandleSize)
         val seekScrollVisual = findViewById<SeekBar>(R.id.seekBarScrollVisual)
@@ -53,6 +54,7 @@ class SettingsActivity : Activity() {
         swVPos.isChecked = prefs.getBoolean("v_pos_left", false)
         swHPos.isChecked = prefs.getBoolean("h_pos_top", false)
         
+        seekCursorSize.progress = prefs.getInt("cursor_size", 50)
         seekAlpha.progress = prefs.getInt("alpha", 200)
         seekHandleSize.progress = prefs.getInt("handle_size", 60)
         seekScrollVisual.progress = prefs.getInt("scroll_visual_size", 4)
@@ -76,6 +78,7 @@ class SettingsActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
         
+        seekCursorSize.setOnSeekBarChangeListener(createPreviewListener("cursor_size"))
         seekAlpha.setOnSeekBarChangeListener(createPreviewListener("alpha"))
         seekHandleSize.setOnSeekBarChangeListener(createPreviewListener("handle_size"))
         seekScrollVisual.setOnSeekBarChangeListener(createPreviewListener("scroll_visual"))
@@ -93,6 +96,7 @@ class SettingsActivity : Activity() {
                 .putBoolean("reverse_scroll", swReverse.isChecked)
                 .putBoolean("v_pos_left", swVPos.isChecked)
                 .putBoolean("h_pos_top", swHPos.isChecked)
+                .putInt("cursor_size", seekCursorSize.progress)
                 .putInt("alpha", seekAlpha.progress)
                 .putInt("handle_size", seekHandleSize.progress)
                 .putInt("scroll_visual_size", seekScrollVisual.progress)

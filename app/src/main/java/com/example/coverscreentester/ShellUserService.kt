@@ -40,8 +40,7 @@ class ShellUserService : IShellService.Stub() {
     
     override fun setWindowingMode(taskId: Int, mode: Int) {
         try {
-            // Mode 5 = Freeform, 1 = Fullscreen
-            Runtime.getRuntime().exec("am task set-windowing-mode  ").waitFor()
+            Runtime.getRuntime().exec("am task set-windowing-mode $taskId $mode").waitFor()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to set window mode", e)
         }
@@ -49,7 +48,7 @@ class ShellUserService : IShellService.Stub() {
 
     override fun resizeTask(taskId: Int, left: Int, top: Int, right: Int, bottom: Int) {
         try {
-            Runtime.getRuntime().exec("am task resize     ")
+            Runtime.getRuntime().exec("am task resize $taskId $left $top $right $bottom")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to resize task", e)
         }
@@ -64,12 +63,12 @@ class ShellUserService : IShellService.Stub() {
         return "" 
     }
 
-    // --- INPUT INJECTION (Existing) ---
+    // --- INPUT INJECTION ---
 
     override fun injectKey(keyCode: Int, action: Int) {
         if (action == KeyEvent.ACTION_DOWN) {
             try {
-                Runtime.getRuntime().exec("input keyevent ")
+                Runtime.getRuntime().exec("input keyevent $keyCode")
             } catch (e: Exception) {
                 Log.e(TAG, "Key injection failed", e)
             }
@@ -78,6 +77,7 @@ class ShellUserService : IShellService.Stub() {
 
     override fun execClick(x: Float, y: Float, displayId: Int) {
         val downTime = SystemClock.uptimeMillis()
+        // REVERTED TO SOURCE_MOUSE to fix keyboard issue
         injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY)
         try { Thread.sleep(50) } catch (e: InterruptedException) {}
         injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
@@ -141,11 +141,13 @@ class ShellUserService : IShellService.Stub() {
         val props = MotionEvent.PointerProperties()
         props.id = 0
         props.toolType = if (source == InputDevice.SOURCE_MOUSE) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
+        
         val coords = MotionEvent.PointerCoords()
         coords.x = x
         coords.y = y
         coords.pressure = if (buttonState != 0 || action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) 1.0f else 0.0f
         coords.size = 1.0f
+        
         var event: MotionEvent? = null
         try {
             event = MotionEvent.obtain(downTime, eventTime, action, 1, arrayOf(props), arrayOf(coords), 0, buttonState, 1.0f, 1.0f, 0, 0, source, 0)
