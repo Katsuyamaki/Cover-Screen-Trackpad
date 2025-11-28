@@ -11,4 +11,7 @@ interface IShellService {
     void setWindowingMode(int taskId, int mode);
     void resizeTask(int taskId, int left, int top, int right, int bottom);
     String runCommand(String cmd);
+    
+    // NEW: Key injection on specific display
+    void injectKeyOnDisplay(int keyCode, int action, int displayId);
 }

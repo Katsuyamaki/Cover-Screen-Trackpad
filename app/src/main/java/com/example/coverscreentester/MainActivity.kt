@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTargetSwitch: Button
     private lateinit var btnResetCursor: Button
     private lateinit var btnDebugMode: Button
+    private lateinit var btnForceKeyboard: Button
     
     private var lastKnownDisplayId = -1
 
@@ -62,6 +63,14 @@ class MainActivity : AppCompatActivity() {
             val intent = Intent("TOGGLE_DEBUG")
             intent.setPackage(packageName)
             sendBroadcast(intent)
+        }
+        
+        btnForceKeyboard = findViewById(R.id.btn_force_keyboard)
+        btnForceKeyboard.setOnClickListener {
+            val intent = Intent("FORCE_KEYBOARD")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+            Toast.makeText(this, "Toggling Keyboard...", Toast.LENGTH_SHORT).show()
         }
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
@@ -184,11 +193,13 @@ class MainActivity : AppCompatActivity() {
         text.setPadding(50, 40, 50, 40)
         text.textSize = 16f
         text.text = """
-            == DEBUG MODE ==
-            Enable to see cursor coordinates when you lift your finger.
+            == KEYBOARD ==
+            Click 'Force Keyboard Toggle' to manually show/hide soft keyboard.
             
-            == RESET CURSOR ==
-            Forces cursor to center of the target screen.
+            == VIRTUAL DISPLAY ==
+            1. Create Virtual Display in Launcher App.
+            2. Click 'Switch Input Target'.
+            3. PINK Border = Controlling Virtual Screen.
         """.trimIndent()
 
         AlertDialog.Builder(this)
