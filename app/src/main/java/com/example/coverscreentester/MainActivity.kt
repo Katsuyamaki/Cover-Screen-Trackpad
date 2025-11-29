@@ -24,7 +24,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var helpButton: Button
     private lateinit var closeButton: Button
     private lateinit var btnManualAdjust: Button
-    private lateinit var btnKeyboard: Button
+    private lateinit var btnTargetSwitch: Button
+    private lateinit var btnResetCursor: Button
+    private lateinit var btnDebugMode: Button
+    private lateinit var btnForceKeyboard: Button
     
     private var lastKnownDisplayId = -1
 
@@ -40,7 +43,35 @@ class MainActivity : AppCompatActivity() {
         helpButton = findViewById(R.id.btn_help)
         closeButton = findViewById(R.id.btn_close)
         btnManualAdjust = findViewById(R.id.btn_manual_adjust)
-        btnKeyboard = findViewById(R.id.btn_keyboard)
+        
+        btnTargetSwitch = findViewById(R.id.btn_target_switch)
+        btnTargetSwitch.setOnClickListener {
+            val intent = Intent("CYCLE_INPUT_TARGET")
+            intent.setPackage(packageName) 
+            sendBroadcast(intent)
+        }
+        
+        btnResetCursor = findViewById(R.id.btn_reset_cursor)
+        btnResetCursor.setOnClickListener {
+            val intent = Intent("RESET_CURSOR")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        }
+        
+        btnDebugMode = findViewById(R.id.btn_debug_mode)
+        btnDebugMode.setOnClickListener {
+            val intent = Intent("TOGGLE_DEBUG")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        }
+        
+        btnForceKeyboard = findViewById(R.id.btn_force_keyboard)
+        btnForceKeyboard.setOnClickListener {
+            val intent = Intent("TOGGLE_CUSTOM_KEYBOARD")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+            Toast.makeText(this, "Toggling Keyboard...", Toast.LENGTH_SHORT).show()
+        }
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             Shizuku.requestPermission(0)
@@ -66,17 +97,6 @@ class MainActivity : AppCompatActivity() {
         
         btnManualAdjust.setOnClickListener {
             startActivity(Intent(this, ManualAdjustActivity::class.java))
-        }
-        
-        btnKeyboard.setOnClickListener {
-            if (!isAccessibilityEnabled()) {
-                Toast.makeText(this, "Please Enable Accessibility Service first", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-            val intent = Intent(this, OverlayService::class.java)
-            intent.action = "TOGGLE_KEYBOARD"
-            startService(intent)
-            Toast.makeText(this, "Toggling Keyboard...", Toast.LENGTH_SHORT).show()
         }
 
         helpButton.setOnClickListener { showHelpDialog() }
@@ -173,30 +193,32 @@ class MainActivity : AppCompatActivity() {
         text.setPadding(50, 40, 50, 40)
         text.textSize = 14f
         text.text = """
-            == SETUP ==
-            1. Start Shizuku.
-            2. Enable Service.
-            
-            == CONTROLS ==
+            == TRACKPAD CONTROLS ==
             • Tap: Left Click
             • Vol Up + Drag: Drag/Select
             • Vol Down: Right Click (Back)
             • Vol Down (Hold 1s): Move trackpad
             
-            == TRACKPAD HANDLES ==
-            • Top-Left: Toggle Keyboard
-            • Top-Right: Move (hold 1s)
-            • Bottom-Right: Resize (hold 1s)
-            • Bottom-Left: Open Menu
+            == CORNER HANDLES ==
+            • Top-Left TAP: Toggle Keyboard
+            • Top-Left HOLD: Move trackpad
+            • Top-Right HOLD: Move window
+            • Bottom-Right HOLD: Resize window
+            • Bottom-Left TAP: Open Menu
             
-            == KEYBOARD ==
-            • Tap keys to type
-            • SHIFT: Single uppercase
-            • Long-press SHIFT: Caps Lock
-            • ?123: Symbol layers
-            • Arrow keys at bottom
+            == CUSTOM KEYBOARD ==
+            • Full QWERTY layout
+            • SHIFT tap = Single uppercase
+            • SHIFT hold = Caps Lock (green)
+            • ?123 = Symbol layers
+            • Arrow/Tab/Esc keys at bottom
             • Drag top bar to move
             • Drag corner to resize
+            
+            == VIRTUAL DISPLAY ==
+            1. Create Virtual Display
+            2. Click 'Switch Local/Remote'
+            3. PINK Border = Remote control
         """.trimIndent()
 
         AlertDialog.Builder(this)

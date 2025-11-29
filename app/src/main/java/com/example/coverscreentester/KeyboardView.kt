@@ -36,19 +36,15 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     enum class KeyboardState {
-        LOWERCASE,
-        UPPERCASE,
-        CAPS_LOCK,
-        SYMBOLS_1,
-        SYMBOLS_2
+        LOWERCASE, UPPERCASE, CAPS_LOCK, SYMBOLS_1, SYMBOLS_2
     }
 
     private var listener: KeyboardListener? = null
     private var currentState = KeyboardState.LOWERCASE
     private var vibrationEnabled = true
-    private var keyHeight = 42
+    private var keyHeight = 40
     private var keySpacing = 2
-    private var fontSize = 14f
+    private var fontSize = 13f
 
     private val lowercaseRows = listOf(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -87,34 +83,18 @@ class KeyboardView @JvmOverloads constructor(
         buildKeyboard()
     }
 
-    fun setKeyboardListener(l: KeyboardListener) {
-        listener = l
-    }
-
-    fun setVibrationEnabled(enabled: Boolean) {
-        vibrationEnabled = enabled
-    }
-
-    fun setKeySize(heightDp: Int, fontSp: Float) {
-        keyHeight = heightDp
-        fontSize = fontSp
-        buildKeyboard()
-    }
+    fun setKeyboardListener(l: KeyboardListener) { listener = l }
+    fun setVibrationEnabled(enabled: Boolean) { vibrationEnabled = enabled }
 
     private fun buildKeyboard() {
         removeAllViews()
-
         val rows = when (currentState) {
             KeyboardState.LOWERCASE -> lowercaseRows
             KeyboardState.UPPERCASE, KeyboardState.CAPS_LOCK -> uppercaseRows
             KeyboardState.SYMBOLS_1 -> symbols1Rows
             KeyboardState.SYMBOLS_2 -> symbols2Rows
         }
-
-        for ((rowIndex, row) in rows.withIndex()) {
-            addView(createRow(row, rowIndex))
-        }
-
+        for ((rowIndex, row) in rows.withIndex()) { addView(createRow(row, rowIndex)) }
         addView(createArrowRow())
     }
 
@@ -125,16 +105,8 @@ class KeyboardView @JvmOverloads constructor(
         row.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(keyHeight)).apply {
             setMargins(0, dpToPx(keySpacing), 0, 0)
         }
-
-        if (rowIndex == 1) {
-            row.setPadding(dpToPx(12), 0, dpToPx(12), 0)
-        }
-
-        for (key in keys) {
-            val keyView = createKey(key, getKeyWeight(key))
-            row.addView(keyView)
-        }
-
+        if (rowIndex == 1) row.setPadding(dpToPx(12), 0, dpToPx(12), 0)
+        for (key in keys) { row.addView(createKey(key, getKeyWeight(key))) }
         return row
     }
 
@@ -146,23 +118,16 @@ class KeyboardView @JvmOverloads constructor(
             setMargins(0, dpToPx(keySpacing + 2), 0, 0)
         }
         row.setBackgroundColor(Color.parseColor("#0D0D0D"))
-
-        for (key in arrowRow) {
-            val keyView = createKey(key, getKeyWeight(key), isArrowRow = true)
-            row.addView(keyView)
-        }
-
+        for (key in arrowRow) { row.addView(createKey(key, getKeyWeight(key), isArrowRow = true)) }
         return row
     }
 
-    private fun getKeyWeight(key: String): Float {
-        return when (key) {
-            "SPACE" -> 4.5f
-            "SHIFT", "BKSP", "ENTER" -> 1.5f
-            "SYM", "SYM1", "SYM2", "ABC" -> 1.3f
-            "TAB", "CTRL", "ESC" -> 1.2f
-            else -> 1f
-        }
+    private fun getKeyWeight(key: String): Float = when (key) {
+        "SPACE" -> 4.5f
+        "SHIFT", "BKSP", "ENTER" -> 1.5f
+        "SYM", "SYM1", "SYM2", "ABC" -> 1.3f
+        "TAB", "CTRL", "ESC" -> 1.2f
+        else -> 1f
     }
 
     private fun createKey(key: String, weight: Float, isArrowRow: Boolean = false): View {
@@ -175,19 +140,13 @@ class KeyboardView @JvmOverloads constructor(
         keyView.gravity = Gravity.CENTER
         keyView.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isArrowRow) fontSize - 2 else fontSize)
         keyView.setTextColor(Color.WHITE)
-
         keyView.text = getDisplayText(key)
 
         val bg = GradientDrawable()
         bg.cornerRadius = dpToPx(6).toFloat()
         bg.setColor(getKeyColor(key, isArrowRow))
         keyView.background = bg
-
-        keyView.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        )
-
+        keyView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         container.addView(keyView)
 
         container.setOnTouchListener { v, event ->
@@ -195,63 +154,38 @@ class KeyboardView @JvmOverloads constructor(
                 MotionEvent.ACTION_DOWN -> {
                     bg.setColor(Color.parseColor("#4A4A4A"))
                     keyView.background = bg
-                    if (vibrationEnabled) {
-                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    }
+                    if (vibrationEnabled) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     bg.setColor(getKeyColor(key, isArrowRow))
                     keyView.background = bg
-                    if (event.action == MotionEvent.ACTION_UP) {
-                        handleKeyPress(key)
-                    }
+                    if (event.action == MotionEvent.ACTION_UP) handleKeyPress(key)
                 }
             }
             true
         }
-
-        if (key == "SHIFT") {
-            container.setOnLongClickListener {
-                toggleCapsLock()
-                true
-            }
-        }
-
+        if (key == "SHIFT") container.setOnLongClickListener { toggleCapsLock(); true }
         return container
     }
 
-    private fun getDisplayText(key: String): String {
-        return when (key) {
-            "SHIFT" -> if (currentState == KeyboardState.CAPS_LOCK) "⬆" else "⇧"
-            "BKSP" -> "⌫"
-            "ENTER" -> "↵"
-            "SPACE" -> "␣"
-            "SYM", "SYM1", "SYM2" -> "?123"
-            "ABC" -> "ABC"
-            "TAB" -> "⇥"
-            "CTRL" -> "Ctrl"
-            "ESC" -> "Esc"
-            "←" -> "◀"
-            "→" -> "▶"
-            "↑" -> "▲"
-            "↓" -> "▼"
-            else -> key
-        }
+    private fun getDisplayText(key: String): String = when (key) {
+        "SHIFT" -> if (currentState == KeyboardState.CAPS_LOCK) "⬆" else "⇧"
+        "BKSP" -> "⌫"; "ENTER" -> "↵"; "SPACE" -> "␣"
+        "SYM", "SYM1", "SYM2" -> "?123"; "ABC" -> "ABC"
+        "TAB" -> "⇥"; "CTRL" -> "Ctrl"; "ESC" -> "Esc"
+        "←" -> "◀"; "→" -> "▶"; "↑" -> "▲"; "↓" -> "▼"
+        else -> key
     }
 
     private fun getKeyColor(key: String, isArrowRow: Boolean): Int {
         if (isArrowRow) return Color.parseColor("#252525")
-        
         return when (key) {
-            "SHIFT" -> {
-                when (currentState) {
-                    KeyboardState.CAPS_LOCK -> Color.parseColor("#3DDC84")
-                    KeyboardState.UPPERCASE -> Color.parseColor("#4A90D9")
-                    else -> Color.parseColor("#3A3A3A")
-                }
+            "SHIFT" -> when (currentState) {
+                KeyboardState.CAPS_LOCK -> Color.parseColor("#3DDC84")
+                KeyboardState.UPPERCASE -> Color.parseColor("#4A90D9")
+                else -> Color.parseColor("#3A3A3A")
             }
-            "BKSP", "ENTER" -> Color.parseColor("#3A3A3A")
-            "SYM", "SYM1", "SYM2", "ABC" -> Color.parseColor("#3A3A3A")
+            "BKSP", "ENTER", "SYM", "SYM1", "SYM2", "ABC" -> Color.parseColor("#3A3A3A")
             "SPACE" -> Color.parseColor("#2D2D2D")
             else -> Color.parseColor("#2D2D2D")
         }
@@ -270,25 +204,12 @@ class KeyboardView @JvmOverloads constructor(
             "→" -> listener?.onSpecialKey(SpecialKey.ARROW_RIGHT)
             "↑" -> listener?.onSpecialKey(SpecialKey.ARROW_UP)
             "↓" -> listener?.onSpecialKey(SpecialKey.ARROW_DOWN)
-            "SYM", "SYM1" -> {
-                currentState = KeyboardState.SYMBOLS_1
-                buildKeyboard()
-            }
-            "SYM2" -> {
-                currentState = KeyboardState.SYMBOLS_2
-                buildKeyboard()
-            }
-            "ABC" -> {
-                currentState = KeyboardState.LOWERCASE
-                buildKeyboard()
-            }
+            "SYM", "SYM1" -> { currentState = KeyboardState.SYMBOLS_1; buildKeyboard() }
+            "SYM2" -> { currentState = KeyboardState.SYMBOLS_2; buildKeyboard() }
+            "ABC" -> { currentState = KeyboardState.LOWERCASE; buildKeyboard() }
             else -> {
                 listener?.onTextInput(key)
-                
-                if (currentState == KeyboardState.UPPERCASE) {
-                    currentState = KeyboardState.LOWERCASE
-                    buildKeyboard()
-                }
+                if (currentState == KeyboardState.UPPERCASE) { currentState = KeyboardState.LOWERCASE; buildKeyboard() }
             }
         }
     }
@@ -317,17 +238,10 @@ class KeyboardView @JvmOverloads constructor(
         val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             v.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else {
-            @Suppress("DEPRECATION")
-            v.vibrate(30)
-        }
+        } else { @Suppress("DEPRECATION") v.vibrate(30) }
     }
 
-    private fun dpToPx(dp: Int): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            dp.toFloat(),
-            resources.displayMetrics
-        ).roundToInt()
-    }
+    private fun dpToPx(dp: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), resources.displayMetrics
+    ).roundToInt()
 }
