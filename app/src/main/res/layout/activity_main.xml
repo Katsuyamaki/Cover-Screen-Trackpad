@@ -40,6 +40,16 @@
             android:layout_marginBottom="8dp"/>
 
         <Button
+            android:id="@+id/btn_keyboard"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Toggle Keyboard ⌨"
+            android:backgroundTint="#9C27B0"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
             android:id="@+id/btn_lock"
             android:layout_width="match_parent"
             android:layout_height="50dp"
@@ -50,55 +60,6 @@
             android:paddingEnd="20dp"
             android:backgroundTint="#3DDC84"
             android:textColor="#000000"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_target_switch"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Target: Switch Local/Remote"
-            android:backgroundTint="#6200EE"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-            
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
-            
-            <Button
-                android:id="@+id/btn_reset_cursor"
-                android:layout_width="0dp"
-                android:layout_height="50dp"
-                android:layout_weight="1"
-                android:text="Reset Cursor"
-                android:backgroundTint="#D32F2F"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:layout_marginEnd="4dp"/>
-                
-            <Button
-                android:id="@+id/btn_debug_mode"
-                android:layout_width="0dp"
-                android:layout_height="50dp"
-                android:layout_weight="1"
-                android:text="Debug Mode"
-                android:backgroundTint="#FBC02D"
-                android:textColor="#000000"
-                android:textSize="12sp"
-                android:layout_marginStart="4dp"/>
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/btn_force_keyboard"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Force Keyboard Toggle"
-            android:backgroundTint="#009688"
-            android:textColor="#FFFFFF"
             android:textStyle="bold"
             android:layout_marginBottom="8dp"/>
 
