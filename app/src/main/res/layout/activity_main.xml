@@ -29,15 +29,34 @@
             android:textColor="#AAAAAA"
             android:layout_marginBottom="16dp"/>
 
-        <Button
-            android:id="@+id/btn_toggle"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Start Trackpad"
-            android:backgroundTint="#3DDC84"
-            android:textColor="#000000"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            
+            <Button
+                android:id="@+id/btn_toggle"
+                android:layout_width="0dp"
+                android:layout_height="50dp"
+                android:layout_weight="1"
+                android:text="Start Trackpad"
+                android:backgroundTint="#3DDC84"
+                android:textColor="#000000"
+                android:textStyle="bold"
+                android:layout_marginEnd="4dp"/>
+                
+            <Button
+                android:id="@+id/btn_hide_app"
+                android:layout_width="0dp"
+                android:layout_height="50dp"
+                android:layout_weight="1"
+                android:text="Hide App"
+                android:backgroundTint="#607D8B"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:layout_marginStart="4dp"/>
+        </LinearLayout>
 
         <Button
             android:id="@+id/btn_lock"
@@ -63,34 +82,15 @@
             android:textStyle="bold"
             android:layout_marginBottom="8dp"/>
             
-        <LinearLayout
+        <Button
+            android:id="@+id/btn_reset_cursor"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
-            
-            <Button
-                android:id="@+id/btn_reset_cursor"
-                android:layout_width="0dp"
-                android:layout_height="50dp"
-                android:layout_weight="1"
-                android:text="Reset Cursor"
-                android:backgroundTint="#D32F2F"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:layout_marginEnd="4dp"/>
-                
-            <Button
-                android:id="@+id/btn_debug_mode"
-                android:layout_width="0dp"
-                android:layout_height="50dp"
-                android:layout_weight="1"
-                android:text="Debug Mode"
-                android:backgroundTint="#FBC02D"
-                android:textColor="#000000"
-                android:textSize="12sp"
-                android:layout_marginStart="4dp"/>
-        </LinearLayout>
+            android:layout_height="50dp"
+            android:text="Reset Cursor Position"
+            android:backgroundTint="#D32F2F"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
 
         <Button
             android:id="@+id/btn_force_keyboard"

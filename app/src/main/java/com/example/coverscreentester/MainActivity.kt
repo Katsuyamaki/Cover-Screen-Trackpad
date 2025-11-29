@@ -1,3 +1,4 @@
+
 package com.example.coverscreentester
 
 import android.content.ComponentName
@@ -18,6 +19,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var toggleButton: Button
+    private lateinit var hideAppButton: Button
     private lateinit var lockButton: Button
     private lateinit var profilesButton: Button
     private lateinit var settingsButton: Button
@@ -26,10 +28,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnManualAdjust: Button
     private lateinit var btnTargetSwitch: Button
     private lateinit var btnResetCursor: Button
-    private lateinit var btnDebugMode: Button
     private lateinit var btnForceKeyboard: Button
     
     private var lastKnownDisplayId = -1
+    
+    // For 5x tap debug mode toggle
+    private var resetCursorTapCount = 0
+    private var lastResetCursorTapTime = 0L
+    private val TAP_TIMEOUT = 1500L // 1.5 seconds to complete 5 taps
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,6 +43,7 @@ class MainActivity : AppCompatActivity() {
 
         statusText = findViewById(R.id.text_status)
         toggleButton = findViewById(R.id.btn_toggle)
+        hideAppButton = findViewById(R.id.btn_hide_app)
         lockButton = findViewById(R.id.btn_lock)
         profilesButton = findViewById(R.id.btn_profiles)
         settingsButton = findViewById(R.id.btn_settings)
@@ -53,16 +60,29 @@ class MainActivity : AppCompatActivity() {
         
         btnResetCursor = findViewById(R.id.btn_reset_cursor)
         btnResetCursor.setOnClickListener {
-            val intent = Intent("RESET_CURSOR")
-            intent.setPackage(packageName)
-            sendBroadcast(intent)
-        }
-        
-        btnDebugMode = findViewById(R.id.btn_debug_mode)
-        btnDebugMode.setOnClickListener {
-            val intent = Intent("TOGGLE_DEBUG")
-            intent.setPackage(packageName)
-            sendBroadcast(intent)
+            val currentTime = System.currentTimeMillis()
+            
+            // Check if we're within the tap timeout window
+            if (currentTime - lastResetCursorTapTime > TAP_TIMEOUT) {
+                resetCursorTapCount = 0
+            }
+            
+            resetCursorTapCount++
+            lastResetCursorTapTime = currentTime
+            
+            if (resetCursorTapCount >= 5) {
+                // Toggle debug mode on 5th tap
+                val intent = Intent("TOGGLE_DEBUG")
+                intent.setPackage(packageName)
+                sendBroadcast(intent)
+                Toast.makeText(this, "Debug Mode Toggled", Toast.LENGTH_SHORT).show()
+                resetCursorTapCount = 0
+            } else {
+                // Normal reset cursor behavior
+                val intent = Intent("RESET_CURSOR")
+                intent.setPackage(packageName)
+                sendBroadcast(intent)
+            }
         }
         
         btnForceKeyboard = findViewById(R.id.btn_force_keyboard)
@@ -86,8 +106,18 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Moving Trackpad to this screen...", Toast.LENGTH_SHORT).show()
             }
         }
+        
+        hideAppButton.setOnClickListener {
+            // Move app to background without closing
+            moveTaskToBack(true)
+        }
 
         settingsButton.setOnClickListener { 
+            // Show trackpad in preview mode when entering settings
+            val intent = Intent("SET_PREVIEW_MODE")
+            intent.setPackage(packageName)
+            intent.putExtra("PREVIEW_MODE", true)
+            sendBroadcast(intent)
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
@@ -96,6 +126,11 @@ class MainActivity : AppCompatActivity() {
         }
         
         btnManualAdjust.setOnClickListener {
+            // Show trackpad in preview mode when entering manual adjust
+            val intent = Intent("SET_PREVIEW_MODE")
+            intent.setPackage(packageName)
+            intent.putExtra("PREVIEW_MODE", true)
+            sendBroadcast(intent)
             startActivity(Intent(this, ManualAdjustActivity::class.java))
         }
 
@@ -122,6 +157,26 @@ class MainActivity : AppCompatActivity() {
         if (isAccessibilityEnabled()) {
             checkAndMoveDisplay()
         }
+        // Hide trackpad when main menu is visible
+        val intent = Intent("SET_TRACKPAD_VISIBILITY")
+        intent.setPackage(packageName)
+        intent.putExtra("VISIBLE", false)
+        sendBroadcast(intent)
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Show trackpad when leaving main menu
+        val intent = Intent("SET_TRACKPAD_VISIBILITY")
+        intent.setPackage(packageName)
+        intent.putExtra("VISIBLE", true)
+        sendBroadcast(intent)
+        
+        // Also disable preview mode
+        val previewIntent = Intent("SET_PREVIEW_MODE")
+        previewIntent.setPackage(packageName)
+        previewIntent.putExtra("PREVIEW_MODE", false)
+        sendBroadcast(previewIntent)
     }
 
     private fun checkAndMoveDisplay() {
@@ -194,31 +249,34 @@ class MainActivity : AppCompatActivity() {
         text.textSize = 14f
         text.text = """
             == TRACKPAD CONTROLS ==
-            • Tap: Left Click
-            • Vol Up + Drag: Drag/Select
-            • Vol Down: Right Click (Back)
-            • Vol Down (Hold 1s): Move trackpad
+            - Tap: Left Click
+            - Vol Up + Drag: Drag/Select
+            - Vol Down: Right Click (Back)
+            - Vol Down (Hold 1s): Move trackpad
             
             == CORNER HANDLES ==
-            • Top-Left TAP: Toggle Keyboard
-            • Top-Left HOLD: Move trackpad
-            • Top-Right HOLD: Move window
-            • Bottom-Right HOLD: Resize window
-            • Bottom-Left TAP: Open Menu
+            - Top-Left TAP: Toggle Keyboard
+            - Top-Left HOLD: Move trackpad
+            - Top-Right HOLD: Move window
+            - Bottom-Right HOLD: Resize window
+            - Bottom-Left TAP: Open Menu
             
             == CUSTOM KEYBOARD ==
-            • Full QWERTY layout
-            • SHIFT tap = Single uppercase
-            • SHIFT hold = Caps Lock (green)
-            • ?123 = Symbol layers
-            • Arrow/Tab/Esc keys at bottom
-            • Drag top bar to move
-            • Drag corner to resize
+            - Full QWERTY layout
+            - SHIFT tap = Single uppercase
+            - SHIFT hold = Caps Lock (green)
+            - ?123 = Symbol layers
+            - Arrow/Tab/Esc keys at bottom
+            - Drag top bar to move
+            - Drag corner to resize
             
             == VIRTUAL DISPLAY ==
             1. Create Virtual Display
             2. Click 'Switch Local/Remote'
             3. PINK Border = Remote control
+            
+            == SECRET ==
+            - Tap Reset Cursor 5x = Debug Mode
         """.trimIndent()
 
         AlertDialog.Builder(this)

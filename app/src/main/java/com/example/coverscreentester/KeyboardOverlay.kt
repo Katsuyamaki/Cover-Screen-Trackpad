@@ -41,20 +41,32 @@ class KeyboardOverlay(
     private var keyboardHeight = 260
     private var screenWidth = 720
     private var screenHeight = 748
+    
+    // Store which display we're on for per-display persistence
+    private var currentDisplayId = 0
 
-    fun setScreenDimensions(width: Int, height: Int) {
+    fun setScreenDimensions(width: Int, height: Int, displayId: Int = 0) {
         screenWidth = width
         screenHeight = height
-        keyboardWidth = (width * 0.95f).toInt().coerceIn(300, 650)
-        keyboardHeight = (height * 0.36f).toInt().coerceIn(180, 320)
+        currentDisplayId = displayId
+        
+        // Load saved size for this display, or use defaults
+        loadKeyboardSizeForDisplay(displayId)
+        
+        // If no saved size, calculate defaults
+        val prefs = context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        if (!prefs.contains("keyboard_width_d$displayId")) {
+            keyboardWidth = (width * 0.95f).toInt().coerceIn(300, 650)
+            keyboardHeight = (height * 0.36f).toInt().coerceIn(180, 320)
+        }
     }
 
     fun updateTargetDisplay(newTargetId: Int): KeyboardOverlay {
         return KeyboardOverlay(context, windowManager, shellService, newTargetId).also {
             it.screenWidth = screenWidth
             it.screenHeight = screenHeight
-            it.keyboardWidth = keyboardWidth
-            it.keyboardHeight = keyboardHeight
+            it.currentDisplayId = currentDisplayId
+            it.loadKeyboardSizeForDisplay(currentDisplayId)
         }
     }
 
@@ -95,6 +107,10 @@ class KeyboardOverlay(
         addCloseButton()
         addTargetLabel()
 
+        // Load saved position for this display
+        val savedX = prefs.getInt("keyboard_x_d$currentDisplayId", (screenWidth - keyboardWidth) / 2)
+        val savedY = prefs.getInt("keyboard_y_d$currentDisplayId", screenHeight - keyboardHeight - 10)
+
         keyboardParams = WindowManager.LayoutParams(
             keyboardWidth, keyboardHeight,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -102,8 +118,8 @@ class KeyboardOverlay(
             PixelFormat.TRANSLUCENT
         )
         keyboardParams?.gravity = Gravity.TOP or Gravity.LEFT
-        keyboardParams?.x = (screenWidth - keyboardWidth) / 2
-        keyboardParams?.y = screenHeight - keyboardHeight - 10
+        keyboardParams?.x = savedX
+        keyboardParams?.y = savedY
         windowManager.addView(keyboardContainer, keyboardParams)
     }
 
@@ -188,18 +204,22 @@ class KeyboardOverlay(
 
     private fun saveKeyboardSize() {
         context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit()
-            .putInt("keyboard_width", keyboardWidth).putInt("keyboard_height", keyboardHeight).apply()
+            .putInt("keyboard_width_d$currentDisplayId", keyboardWidth)
+            .putInt("keyboard_height_d$currentDisplayId", keyboardHeight)
+            .apply()
     }
 
     private fun saveKeyboardPosition() {
         context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit()
-            .putInt("keyboard_x", keyboardParams?.x ?: 0).putInt("keyboard_y", keyboardParams?.y ?: 0).apply()
+            .putInt("keyboard_x_d$currentDisplayId", keyboardParams?.x ?: 0)
+            .putInt("keyboard_y_d$currentDisplayId", keyboardParams?.y ?: 0)
+            .apply()
     }
 
-    fun loadKeyboardSize() {
+    private fun loadKeyboardSizeForDisplay(displayId: Int) {
         val prefs = context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
-        keyboardWidth = prefs.getInt("keyboard_width", keyboardWidth)
-        keyboardHeight = prefs.getInt("keyboard_height", keyboardHeight)
+        keyboardWidth = prefs.getInt("keyboard_width_d$displayId", keyboardWidth)
+        keyboardHeight = prefs.getInt("keyboard_height_d$displayId", keyboardHeight)
     }
 
     override fun onKeyPress(keyCode: Int, char: Char?) { injectKey(keyCode) }
@@ -207,10 +227,8 @@ class KeyboardOverlay(
     override fun onTextInput(text: String) {
         if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
         
-        // Use input text command - handles all characters including shifted ones
         Thread {
             try {
-                // Escape special shell characters
                 val escaped = escapeForShell(text)
                 val cmd = "input -d $targetDisplayId text $escaped"
                 shellService.runCommand(cmd)
@@ -246,7 +264,6 @@ class KeyboardOverlay(
         if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
         Thread {
             try {
-                // Use input keyevent command with display parameter
                 val cmd = "input -d $targetDisplayId keyevent $keyCode"
                 shellService.runCommand(cmd)
             } catch (e: Exception) { Log.e(TAG, "Key injection failed", e) }

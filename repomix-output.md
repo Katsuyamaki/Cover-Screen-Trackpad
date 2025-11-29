@@ -53,6 +53,11 @@ app/
         com/
           example/
             coverscreentester/
+              KeyboardActivity.kt
+              KeyboardManager.kt
+              KeyboardOverlay.kt
+              KeyboardUtils.kt
+              KeyboardView.kt
               MainActivity.kt
               ManualAdjustActivity.kt
               OverlayService.kt
@@ -60,6 +65,7 @@ app/
               SettingsActivity.kt
               ShellUserService.kt
               ShizukuBinder.java
+              ShizukuInputHandler.kt
               TrackpadService.kt
       res/
         drawable/
@@ -70,10 +76,13 @@ app/
           ic_lock_open.xml
           red_border.xml
         layout/
+          activity_keyboard.xml
           activity_main.xml
           activity_manual_adjust.xml
+          activity_menu.xml
           activity_profiles.xml
           activity_settings.xml
+          layout_trackpad.xml
         mipmap-anydpi-v26/
           ic_launcher_round.xml
           ic_launcher.xml
@@ -105,6 +114,7 @@ gradle/
 .gitignore
 build.gradle.kts
 CoverScreenTrackpad.apk
+crash_log.txt
 gradle.properties
 gradlew
 gradlew.bat
@@ -139,6 +149,460 @@ class ExampleInstrumentedTest {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("com.example.coverscreentester", appContext.packageName)
     }
+}
+```
+
+## File: app/src/main/java/com/example/coverscreentester/KeyboardActivity.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.app.Activity
+import android.content.Intent
+import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.EditText
+import android.widget.TextView
+import android.view.View
+
+/**
+ * A dedicated Activity to hold Keyboard Focus.
+ * We use an Activity instead of a Service Overlay because Android 
+ * aggressively kills keyboards attached to non-focusable windows 
+ * or inactive displays.
+ */
+class KeyboardActivity : Activity() {
+
+    private lateinit var inputField: EditText
+    private lateinit var statusText: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // Make window transparent
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+        
+        // Ensure we get focus
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        
+        setContentView(R.layout.activity_keyboard)
+
+        inputField = findViewById(R.id.et_remote_input)
+        statusText = findViewById(R.id.tv_status)
+        
+        // Dismiss if user taps the transparent top area
+        findViewById<View>(R.id.view_touch_dismiss).setOnClickListener {
+            finish()
+        }
+
+        findViewById<Button>(R.id.btn_close).setOnClickListener {
+            finish()
+        }
+
+        findViewById<Button>(R.id.btn_clear).setOnClickListener {
+            inputField.setText("")
+        }
+
+        inputField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (count > 0 && s != null) {
+                    val char = s[start]
+                    sendCharToService(char)
+                }
+            }
+            override fun afterTextChanged(s: Editable?) {
+                // Do NOT clear text automatically. It causes keyboard flicker.
+            }
+        })
+        
+        inputField.requestFocus()
+    }
+
+    private fun sendCharToService(c: Char) {
+        val intent = Intent("INJECT_CHAR")
+        intent.setPackage(packageName)
+        intent.putExtra("CHAR", c)
+        sendBroadcast(intent)
+    }
+}
+```
+
+## File: app/src/main/java/com/example/coverscreentester/KeyboardManager.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import kotlin.math.abs
+
+class KeyboardManager(
+    private val context: Context,
+    private val windowManager: WindowManager,
+    private val keyInjector: (Int) -> Unit
+) {
+    var keyboardLayout: FrameLayout? = null
+    var layoutParams: WindowManager.LayoutParams? = null
+    
+    private var isShifted = false
+    private var isSymbols = false
+    private var isVisible = false
+    
+    // UI Constants
+    private val KEY_HEIGHT = 45.dp
+    private val ROW_MARGIN = 2.dp
+    private val KEY_MARGIN = 2.dp
+    private var keyboardWidth = 450 // Default, will resize
+    private var keyboardHeight = 350
+    
+    // Data Classes
+    data class KeyDef(val label: String, val code: Int, val weight: Float = 1f, val isSpecial: Boolean = false)
+
+    private val ROW_1 = listOf(
+        KeyDef("q", KeyEvent.KEYCODE_Q), KeyDef("w", KeyEvent.KEYCODE_W), KeyDef("e", KeyEvent.KEYCODE_E),
+        KeyDef("r", KeyEvent.KEYCODE_R), KeyDef("t", KeyEvent.KEYCODE_T), KeyDef("y", KeyEvent.KEYCODE_Y),
+        KeyDef("u", KeyEvent.KEYCODE_U), KeyDef("i", KeyEvent.KEYCODE_I), KeyDef("o", KeyEvent.KEYCODE_O),
+        KeyDef("p", KeyEvent.KEYCODE_P)
+    )
+    
+    private val ROW_2 = listOf(
+        KeyDef("a", KeyEvent.KEYCODE_A), KeyDef("s", KeyEvent.KEYCODE_S), KeyDef("d", KeyEvent.KEYCODE_D),
+        KeyDef("f", KeyEvent.KEYCODE_F), KeyDef("g", KeyEvent.KEYCODE_G), KeyDef("h", KeyEvent.KEYCODE_H),
+        KeyDef("j", KeyEvent.KEYCODE_J), KeyDef("k", KeyEvent.KEYCODE_K), KeyDef("l", KeyEvent.KEYCODE_L)
+    )
+    
+    private val ROW_3 = listOf(
+        KeyDef("SHIFT", -1, 1.5f, true),
+        KeyDef("z", KeyEvent.KEYCODE_Z), KeyDef("x", KeyEvent.KEYCODE_X), KeyDef("c", KeyEvent.KEYCODE_C),
+        KeyDef("v", KeyEvent.KEYCODE_V), KeyDef("b", KeyEvent.KEYCODE_B), KeyDef("n", KeyEvent.KEYCODE_N),
+        KeyDef("m", KeyEvent.KEYCODE_M),
+        KeyDef("⌫", KeyEvent.KEYCODE_DEL, 1.5f, true)
+    )
+    
+    private val ROW_4 = listOf(
+        KeyDef("?123", -2, 1.5f, true),
+        KeyDef(",", KeyEvent.KEYCODE_COMMA), 
+        KeyDef("SPACE", KeyEvent.KEYCODE_SPACE, 4f), 
+        KeyDef(".", KeyEvent.KEYCODE_PERIOD),
+        KeyDef("ENTER", KeyEvent.KEYCODE_ENTER, 1.5f, true)
+    )
+
+    private val ARROWS = listOf(
+        KeyDef("◄", KeyEvent.KEYCODE_DPAD_LEFT, 1f, true),
+        KeyDef("▲", KeyEvent.KEYCODE_DPAD_UP, 1f, true),
+        KeyDef("▼", KeyEvent.KEYCODE_DPAD_DOWN, 1f, true),
+        KeyDef("►", KeyEvent.KEYCODE_DPAD_RIGHT, 1f, true)
+    )
+
+    // Number Row (Replaces Row 1 in Symbol Mode)
+    private val ROW_NUMS = listOf(
+        KeyDef("1", KeyEvent.KEYCODE_1), KeyDef("2", KeyEvent.KEYCODE_2), KeyDef("3", KeyEvent.KEYCODE_3),
+        KeyDef("4", KeyEvent.KEYCODE_4), KeyDef("5", KeyEvent.KEYCODE_5), KeyDef("6", KeyEvent.KEYCODE_6),
+        KeyDef("7", KeyEvent.KEYCODE_7), KeyDef("8", KeyEvent.KEYCODE_8), KeyDef("9", KeyEvent.KEYCODE_9),
+        KeyDef("0", KeyEvent.KEYCODE_0)
+    )
+    
+    private val ROW_SYMS = listOf(
+        KeyDef("@", KeyEvent.KEYCODE_AT), KeyDef("#", KeyEvent.KEYCODE_POUND), KeyDef("$", KeyEvent.KEYCODE_4), // $ shares 4 shift usually, simplified here
+        KeyDef("%", KeyEvent.KEYCODE_5), KeyDef("&", KeyEvent.KEYCODE_7), KeyDef("-", KeyEvent.KEYCODE_MINUS),
+        KeyDef("+", KeyEvent.KEYCODE_PLUS), KeyDef("(", KeyEvent.KEYCODE_NUMPAD_LEFT_PAREN), KeyDef(")", KeyEvent.KEYCODE_NUMPAD_RIGHT_PAREN)
+    )
+
+    fun createView(): View {
+        val root = FrameLayout(context)
+        val bg = GradientDrawable()
+        bg.setColor(Color.parseColor("#EE121212"))
+        bg.cornerRadius = 20f
+        bg.setStroke(2, Color.parseColor("#44FFFFFF"))
+        root.background = bg
+
+        val mainContainer = LinearLayout(context)
+        mainContainer.orientation = LinearLayout.VERTICAL
+        mainContainer.setPadding(10, 20, 10, 10)
+        
+        // Add Rows
+        mainContainer.addView(createRow(if (isSymbols) ROW_NUMS else ROW_1))
+        mainContainer.addView(createRow(if (isSymbols) ROW_SYMS else ROW_2))
+        mainContainer.addView(createRow(ROW_3))
+        mainContainer.addView(createRow(ROW_4))
+        mainContainer.addView(createRow(ARROWS))
+
+        root.addView(mainContainer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        
+        // Add Resize Handle (Bottom Right)
+        val resizeHandle = View(context)
+        resizeHandle.setBackgroundColor(Color.parseColor("#803DDC84"))
+        val rhParams = FrameLayout.LayoutParams(50, 50)
+        rhParams.gravity = Gravity.BOTTOM or Gravity.RIGHT
+        root.addView(resizeHandle, rhParams)
+        
+        resizeHandle.setOnTouchListener { _, event -> handleResize(event) }
+        
+        // Add Move Handle (Top Center)
+        val moveHandle = View(context)
+        moveHandle.setBackgroundColor(Color.parseColor("#40FFFFFF"))
+        val mhParams = FrameLayout.LayoutParams(100, 15)
+        mhParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        mhParams.topMargin = 5
+        root.addView(moveHandle, mhParams)
+        
+        moveHandle.setOnTouchListener { _, event -> handleMove(event) }
+
+        return root
+    }
+
+    private fun createRow(keys: List<KeyDef>): LinearLayout {
+        val row = LinearLayout(context)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        
+        for (k in keys) {
+            val btn = TextView(context)
+            val label = if (!isSymbols && isShifted && k.label.length == 1) k.label.uppercase() else k.label
+            
+            btn.text = label
+            btn.setTextColor(Color.WHITE)
+            btn.textSize = 14f
+            btn.gravity = Gravity.CENTER
+            btn.typeface = Typeface.DEFAULT_BOLD
+            
+            val keyBg = GradientDrawable()
+            keyBg.setColor(if (k.isSpecial) Color.parseColor("#444444") else Color.parseColor("#2A2A2A"))
+            keyBg.cornerRadius = 10f
+            btn.background = keyBg
+            
+            val params = LinearLayout.LayoutParams(0, KEY_HEIGHT)
+            params.weight = k.weight
+            params.setMargins(KEY_MARGIN, ROW_MARGIN, KEY_MARGIN, ROW_MARGIN)
+            row.addView(btn, params)
+            
+            btn.setOnClickListener {
+                handleKeyPress(k)
+                // Visual feedback
+                btn.alpha = 0.5f
+                btn.postDelayed({ btn.alpha = 1.0f }, 50)
+            }
+        }
+        return row
+    }
+
+    private fun handleKeyPress(k: KeyDef) {
+        when (k.code) {
+            -1 -> { // SHIFT
+                isShifted = !isShifted
+                refreshLayout()
+            }
+            -2 -> { // SYMBOLS
+                isSymbols = !isSymbols
+                refreshLayout()
+            }
+            else -> {
+                // If it's a letter and shifted, we rely on the injected keycode being consistent
+                // In a real key event injection, KeyCode_A + CapsLock/Shift state is needed.
+                // For simplicity, Shizuku injects the raw keycode. 
+                // To support true caps, we might need to inject CAPS_LOCK toggle or shift modifier.
+                // Current simplified approach: Just inject the code.
+                keyInjector(k.code)
+                
+                // Auto unshift after one char (standard mobile behavior)
+                if (isShifted) {
+                    isShifted = false
+                    refreshLayout()
+                }
+            }
+        }
+    }
+
+    fun show(width: Int, height: Int) {
+        if (isVisible) return
+        
+        keyboardWidth = width
+        keyboardHeight = height
+
+        layoutParams = WindowManager.LayoutParams(
+            keyboardWidth,
+            WindowManager.LayoutParams.WRAP_CONTENT, // Height dynamic based on rows
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or 
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            android.graphics.PixelFormat.TRANSLUCENT
+        )
+        layoutParams?.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        layoutParams?.y = 50 // Margin from bottom
+
+        keyboardLayout = createView() as FrameLayout
+        windowManager.addView(keyboardLayout, layoutParams)
+        isVisible = true
+    }
+
+    fun hide() {
+        if (!isVisible) return
+        try {
+            windowManager.removeView(keyboardLayout)
+        } catch (e: Exception) {}
+        isVisible = false
+        keyboardLayout = null
+    }
+    
+    fun toggle(width: Int, height: Int) {
+        if (isVisible) hide() else show(width, height)
+    }
+
+    private fun refreshLayout() {
+        if (!isVisible) return
+        val p = keyboardLayout?.layoutParams
+        windowManager.removeView(keyboardLayout)
+        keyboardLayout = createView() as FrameLayout
+        windowManager.addView(keyboardLayout, p)
+    }
+
+    // --- Helpers ---
+    private val Int.dp: Int get() = (this * context.resources.displayMetrics.density).toInt()
+    
+    private var initialX = 0
+    private var initialY = 0
+    private var initialTouchX = 0f
+    private var initialTouchY = 0f
+    
+    private fun handleResize(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                initialTouchX = event.rawX
+                initialTouchY = event.rawY
+                layoutParams?.let { initialX = it.width; initialY = it.height } // abusing x/y vars for w/h
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = (event.rawX - initialTouchX).toInt()
+                layoutParams?.width = (initialX + dx).coerceAtLeast(300)
+                // Height updates automatically due to WRAP_CONTENT, but we could force scale
+                windowManager.updateViewLayout(keyboardLayout, layoutParams)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun handleMove(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                initialTouchX = event.rawX
+                initialTouchY = event.rawY
+                layoutParams?.let { initialX = it.x; initialY = it.y }
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = (initialTouchX - event.rawX).toInt() // Inverse for bottom gravity sometimes depending on config
+                val dy = (initialTouchY - event.rawY).toInt()
+                // For Gravity.BOTTOM, positive Y moves UP
+                layoutParams?.y = (initialY + dy)
+                windowManager.updateViewLayout(keyboardLayout, layoutParams)
+                return true
+            }
+        }
+        return false
+    }
+}
+```
+
+## File: app/src/main/java/com/example/coverscreentester/KeyboardUtils.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.view.KeyEvent
+
+object KeyboardUtils {
+
+    // Special IDs for logic
+    const val KEY_SHIFT = -100
+    const val KEY_SYM = -101
+    const val KEY_SPACE = KeyEvent.KEYCODE_SPACE
+    const val KEY_DEL = KeyEvent.KEYCODE_DEL
+    const val KEY_ENTER = KeyEvent.KEYCODE_ENTER
+    
+    // Arrows
+    const val KEY_UP = KeyEvent.KEYCODE_DPAD_UP
+    const val KEY_DOWN = KeyEvent.KEYCODE_DPAD_DOWN
+    const val KEY_LEFT = KeyEvent.KEYCODE_DPAD_LEFT
+    const val KEY_RIGHT = KeyEvent.KEYCODE_DPAD_RIGHT
+
+    data class KeyDef(val label: String, val code: Int, val widthWeight: Float = 1.0f)
+
+    val ROW_1_LOWER = listOf(
+        KeyDef("q", KeyEvent.KEYCODE_Q), KeyDef("w", KeyEvent.KEYCODE_W), KeyDef("e", KeyEvent.KEYCODE_E),
+        KeyDef("r", KeyEvent.KEYCODE_R), KeyDef("t", KeyEvent.KEYCODE_T), KeyDef("y", KeyEvent.KEYCODE_Y),
+        KeyDef("u", KeyEvent.KEYCODE_U), KeyDef("i", KeyEvent.KEYCODE_I), KeyDef("o", KeyEvent.KEYCODE_O), KeyDef("p", KeyEvent.KEYCODE_P)
+    )
+    
+    val ROW_2_LOWER = listOf(
+        KeyDef("a", KeyEvent.KEYCODE_A), KeyDef("s", KeyEvent.KEYCODE_S), KeyDef("d", KeyEvent.KEYCODE_D),
+        KeyDef("f", KeyEvent.KEYCODE_F), KeyDef("g", KeyEvent.KEYCODE_G), KeyDef("h", KeyEvent.KEYCODE_H),
+        KeyDef("j", KeyEvent.KEYCODE_J), KeyDef("k", KeyEvent.KEYCODE_K), KeyDef("l", KeyEvent.KEYCODE_L)
+    )
+
+    val ROW_3_LOWER = listOf(
+        KeyDef("⇧", KEY_SHIFT, 1.5f), KeyDef("z", KeyEvent.KEYCODE_Z), KeyDef("x", KeyEvent.KEYCODE_X),
+        KeyDef("c", KeyEvent.KEYCODE_C), KeyDef("v", KeyEvent.KEYCODE_V), KeyDef("b", KeyEvent.KEYCODE_B),
+        KeyDef("n", KeyEvent.KEYCODE_N), KeyDef("m", KeyEvent.KEYCODE_M), KeyDef("⌫", KEY_DEL, 1.5f)
+    )
+
+    // UPPERCASE 
+    val ROW_1_UPPER = ROW_1_LOWER.map { it.copy(label = it.label.uppercase()) }
+    val ROW_2_UPPER = ROW_2_LOWER.map { it.copy(label = it.label.uppercase()) }
+    val ROW_3_UPPER = ROW_3_LOWER.map { 
+        if(it.label.length == 1) it.copy(label = it.label.uppercase()) else it 
+    }
+
+    // SYMBOLS
+    val ROW_1_SYM = listOf(
+        KeyDef("1", KeyEvent.KEYCODE_1), KeyDef("2", KeyEvent.KEYCODE_2), KeyDef("3", KeyEvent.KEYCODE_3),
+        KeyDef("4", KeyEvent.KEYCODE_4), KeyDef("5", KeyEvent.KEYCODE_5), KeyDef("6", KeyEvent.KEYCODE_6),
+        KeyDef("7", KeyEvent.KEYCODE_7), KeyDef("8", KeyEvent.KEYCODE_8), KeyDef("9", KeyEvent.KEYCODE_9), KeyDef("0", KeyEvent.KEYCODE_0)
+    )
+    
+    val ROW_2_SYM = listOf(
+        KeyDef("@", KeyEvent.KEYCODE_AT), KeyDef("#", KeyEvent.KEYCODE_POUND), KeyDef("$", KeyEvent.KEYCODE_4), // $ shares 4 shift usually, but we map roughly
+        KeyDef("%", KeyEvent.KEYCODE_5), KeyDef("&", KeyEvent.KEYCODE_7), KeyDef("-", KeyEvent.KEYCODE_MINUS),
+        KeyDef("+", KeyEvent.KEYCODE_PLUS), KeyDef("(", KeyEvent.KEYCODE_NUMPAD_LEFT_PAREN), KeyDef(")", KeyEvent.KEYCODE_NUMPAD_RIGHT_PAREN)
+    )
+    
+    val ROW_3_SYM = listOf(
+        KeyDef("ABC", KEY_SYM, 1.5f), KeyDef("!", KeyEvent.KEYCODE_1), KeyDef("\"", KeyEvent.KEYCODE_APOSTROPHE),
+        KeyDef("'", KeyEvent.KEYCODE_APOSTROPHE), KeyDef(":", KeyEvent.KEYCODE_SEMICOLON), KeyDef(";", KeyEvent.KEYCODE_SEMICOLON),
+        KeyDef("/", KeyEvent.KEYCODE_SLASH), KeyDef("?", KeyEvent.KEYCODE_SLASH), KeyDef("⌫", KEY_DEL, 1.5f)
+    )
+
+    val ROW_4 = listOf(
+        KeyDef("?123", KEY_SYM, 1.5f),
+        KeyDef(",", KeyEvent.KEYCODE_COMMA),
+        KeyDef("SPACE", KEY_SPACE, 4.0f),
+        KeyDef(".", KeyEvent.KEYCODE_PERIOD),
+        KeyDef("⏎", KEY_ENTER, 1.5f)
+    )
+    
+    val ROW_5_ARROWS = listOf(
+        KeyDef("HIDE", -999, 2.0f), // Hide
+        KeyDef("◄", KEY_LEFT),
+        KeyDef("▲", KEY_UP),
+        KeyDef("▼", KEY_DOWN),
+        KeyDef("►", KEY_RIGHT)
+    )
 }
 ```
 
@@ -326,6 +790,48 @@ class ProfilesActivity : Activity() {
         }
         
         tvList.text = sb.toString()
+    }
+}
+```
+
+## File: app/src/main/java/com/example/coverscreentester/ShizukuInputHandler.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.util.Log
+
+object ShizukuInputHandler {
+    private const val TAG = "ShizukuInputHandler"
+
+    /**
+     * Injects a relative mouse movement event to a specific display.
+     * * @param dx The change in X.
+     * @param dy The change in Y.
+     * @param displayId The ID of the target display (0 is usually local, others are virtual/external).
+     */
+    fun injectMouseMovement(dx: Float, dy: Float, displayId: Int) {
+        // Construct the command with the display flag (-d) explicitly placed before 'mouse'
+        val command = "input -d $displayId mouse relative $dx $dy"
+        executeCommand(command)
+    }
+
+    /**
+     * Injects a mouse click event to a specific display.
+     */
+    fun injectMouseClick(displayId: Int) {
+        val command = "input -d $displayId mouse tap 0 0" // Tap coordinates often ignored for mouse click, but required by syntax
+        executeCommand(command)
+    }
+
+    private fun executeCommand(command: String) {
+        try {
+            // Using Shizuku to execute the shell command
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+            // If strictly using Shizuku binding without 'su', replace above with:
+            // Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject input: ${e.message}")
+        }
     }
 }
 ```
@@ -801,6 +1307,80 @@ class TrackpadService : AccessibilityService() {
 </shape>
 ```
 
+## File: app/src/main/res/layout/activity_keyboard.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="bottom"
+    android:background="#00000000">
+
+    <View
+        android:id="@+id/view_touch_dismiss"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#00000000" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#222222"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Remote Input Active"
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:layout_marginBottom="8dp"/>
+
+        <EditText
+            android:id="@+id/et_remote_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#333333"
+            android:padding="12dp"
+            android:textColor="#FFFFFF"
+            android:hint="Type here..."
+            android:textColorHint="#888888"
+            android:inputType="textNoSuggestions|textVisiblePassword"
+            android:imeOptions="flagNoExtractUi"
+            android:minHeight="48dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btn_clear"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Clear"
+                android:backgroundTint="#FF9800"
+                android:layout_marginEnd="4dp"/>
+
+            <Button
+                android:id="@+id/btn_close"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Close"
+                android:backgroundTint="#990000"
+                android:layout_marginStart="4dp"/>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
+```
+
 ## File: app/src/main/res/layout/activity_manual_adjust.xml
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -946,6 +1526,42 @@ class TrackpadService : AccessibilityService() {
 </LinearLayout>
 ```
 
+## File: app/src/main/res/layout/activity_menu.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Checking Shizuku..."
+        android:layout_marginBottom="24dp"
+        android:textSize="16sp" />
+
+    <Button
+        android:id="@+id/btnQuadrant"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="4-App Quadrant"
+        android:enabled="false" />
+
+    <Button
+        android:id="@+id/btnSplit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="2-App Split"
+        android:enabled="false" />
+
+</LinearLayout>
+```
+
 ## File: app/src/main/res/layout/activity_profiles.xml
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -1047,6 +1663,52 @@ class TrackpadService : AccessibilityService() {
 
     </LinearLayout>
 </ScrollView>
+```
+
+## File: app/src/main/res/layout/layout_trackpad.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#99000000">
+
+    <View
+        android:id="@+id/touchArea"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:layout_gravity="top|start"
+        android:background="#CC000000"
+        android:layout_margin="16dp"
+        android:elevation="10dp">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Target: Local"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Button
+            android:id="@+id/btnSwitchTarget"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Switch Display"
+            android:textSize="12sp"
+            android:padding="8dp" />
+
+    </LinearLayout>
+</FrameLayout>
 ```
 
 ## File: app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
@@ -1213,6 +1875,490 @@ plugins {
 }
 ```
 
+## File: crash_log.txt
+```
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: Process: com.example.com.katsuyamaki.coverscreenlauncher, PID: 14842
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.com.katsuyamaki.coverscreenlauncher/com.example.quadrantlauncher.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at com.example.quadrantlauncher.MainActivity.onCreate(MainActivity.kt:35)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 13:41:08.240 14842 14842 E AndroidRuntime: 	... 13 more
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: Process: com.example.coverscreentester, PID: 4765
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 13:41:09.350  4765  4765 E AndroidRuntime: 	... 13 more
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: Process: com.example.coverscreentester, PID: 4377
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:13:43.939  4377  4377 E AndroidRuntime: 	... 13 more
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: Process: com.example.coverscreentester, PID: 5743
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:13:47.230  5743  5743 E AndroidRuntime: 	... 13 more
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: Process: com.example.coverscreentester, PID: 5808
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:13:49.449  5808  5808 E AndroidRuntime: 	... 13 more
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: Process: com.example.coverscreentester, PID: 6400
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:13:57.441  6400  6400 E AndroidRuntime: 	... 13 more
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: Process: com.example.coverscreentester, PID: 11723
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:17:57.229 11723 11723 E AndroidRuntime: 	... 13 more
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: Process: com.example.coverscreentester, PID: 12994
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:17:58.875 12994 12994 E AndroidRuntime: 	... 13 more
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: Process: com.example.coverscreentester, PID: 13308
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:18:02.621 13308 13308 E AndroidRuntime: 	... 13 more
+11-28 19:18:03.631  1434  2290 E WindowManager: win=Window{417f265 u0 com.example.com.katsuyamaki.coverscreenlauncher} destroySurfaces: appStopped=true cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 caller=com.android.server.wm.WindowManagerService.tryStartExitingAnimation:134 com.android.server.wm.WindowManagerService.relayoutWindow:1147 com.android.server.wm.Session.relayout:27 android.view.IWindowSession$Stub.onTransact:829 com.android.server.wm.Session.onTransact:1 android.os.Binder.execTransactInternal:1457 android.os.Binder.execTransact:1401 
+11-28 19:18:03.657  1434  2362 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:18:07.439  1434  2290 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:18:11.597  1434  3124 E WindowManager: win=Window{d318130 u0 com.example.com.katsuyamaki.coverscreenlauncher} destroySurfaces: appStopped=true cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 caller=com.android.server.wm.WindowManagerService.tryStartExitingAnimation:134 com.android.server.wm.WindowManagerService.relayoutWindow:1147 com.android.server.wm.Session.relayout:27 android.view.IWindowSession$Stub.onTransact:829 com.android.server.wm.Session.onTransact:1 android.os.Binder.execTransactInternal:1457 android.os.Binder.execTransact:1401 
+11-28 19:18:11.663  1434  3124 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: Process: com.example.coverscreentester, PID: 13867
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:18:16.286 13867 13867 E AndroidRuntime: 	... 13 more
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: Process: com.example.coverscreentester, PID: 15003
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:18:27.082 15003 15003 E AndroidRuntime: 	... 13 more
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: Process: com.example.coverscreentester, PID: 15121
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:18:28.888 15121 15121 E AndroidRuntime: 	... 13 more
+11-28 19:24:01.160  1434  2282 E WindowManager: win=Window{d318130 u0 com.example.com.katsuyamaki.coverscreenlauncher} destroySurfaces: appStopped=true cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 caller=com.android.server.wm.WindowManagerService.tryStartExitingAnimation:134 com.android.server.wm.WindowManagerService.relayoutWindow:1147 com.android.server.wm.Session.relayout:27 android.view.IWindowSession$Stub.onTransact:829 com.android.server.wm.Session.onTransact:1 android.os.Binder.execTransactInternal:1457 android.os.Binder.execTransact:1401 
+11-28 19:24:01.267  1434  1641 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:24:14.076  1434  2282 E WindowManager: win=Window{d318130 u0 com.example.com.katsuyamaki.coverscreenlauncher} destroySurfaces: appStopped=true cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 caller=com.android.server.wm.WindowManagerService.tryStartExitingAnimation:134 com.android.server.wm.WindowManagerService.relayoutWindow:1147 com.android.server.wm.Session.relayout:27 android.view.IWindowSession$Stub.onTransact:829 com.android.server.wm.Session.onTransact:1 android.os.Binder.execTransactInternal:1457 android.os.Binder.execTransact:1401 
+11-28 19:24:14.194  1434  4777 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:25:39.560  1434  2297 E WindowManager: win=Window{d318130 u0 com.example.com.katsuyamaki.coverscreenlauncher} destroySurfaces: appStopped=true cleanupOnResume=false win.mWindowRemovalAllowed=false win.mRemoveOnExit=false win.mViewVisibility=8 caller=com.android.server.wm.WindowManagerService.tryStartExitingAnimation:134 com.android.server.wm.WindowManagerService.relayoutWindow:1147 com.android.server.wm.Session.relayout:27 android.view.IWindowSession$Stub.onTransact:829 com.android.server.wm.Session.onTransact:1 android.os.Binder.execTransactInternal:1457 android.os.Binder.execTransact:1401 
+11-28 19:25:39.640  1434  4027 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:25:44.231  1434  2079 E NotificationService: Suppressing toast from package com.example.com.katsuyamaki.coverscreenlauncher by user request.
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: Process: com.example.coverscreentester, PID: 22260
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:25:54.114 22260 22260 E AndroidRuntime: 	... 13 more
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: Process: com.example.coverscreentester, PID: 22395
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:25:55.580 22395 22395 E AndroidRuntime: 	... 13 more
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: Process: com.example.coverscreentester, PID: 22446
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:25:57.096 22446 22446 E AndroidRuntime: 	... 13 more
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: Process: com.example.coverscreentester, PID: 22521
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:25:59.532 22521 22521 E AndroidRuntime: 	... 13 more
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: Process: com.example.coverscreentester, PID: 27492
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:30:45.965 27492 27492 E AndroidRuntime: 	... 13 more
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: FATAL EXCEPTION: main
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: Process: com.example.coverscreentester, PID: 27747
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: java.lang.RuntimeException: Unable to start activity ComponentInfo{com.example.coverscreentester/com.example.coverscreentester.MainActivity}: java.lang.IllegalStateException: binder haven't been received
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4640)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4871)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:133)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:103)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:80)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3103)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:110)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:273)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:363)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9939)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:632)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:975)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: Caused by: java.lang.IllegalStateException: binder haven't been received
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at rikka.shizuku.Shizuku.requireService(Shizuku.java:430)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at rikka.shizuku.Shizuku.checkSelfPermission(Shizuku.java:868)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at com.example.coverscreentester.MainActivity.onCreate(MainActivity.kt:76)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9519)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9488)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1524)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4622)
+11-28 19:31:35.891 27747 27747 E AndroidRuntime: 	... 13 more
+```
+
 ## File: gradlew
 ```
 #!/bin/sh
@@ -1274,6 +2420,257 @@ dependencyResolutionManagement {
 
 rootProject.name = "CoverScreenTrackpad"
 include(":app")
+```
+
+## File: app/src/main/java/com/example/coverscreentester/KeyboardView.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.util.AttributeSet
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import kotlin.math.roundToInt
+
+class KeyboardView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : LinearLayout(context, attrs, defStyleAttr) {
+
+    interface KeyboardListener {
+        fun onKeyPress(keyCode: Int, char: Char?)
+        fun onTextInput(text: String)
+        fun onSpecialKey(key: SpecialKey)
+    }
+
+    enum class SpecialKey {
+        BACKSPACE, ENTER, SPACE, SHIFT, CAPS_LOCK, SYMBOLS, ABC,
+        TAB, ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
+        HOME, END, DELETE, ESCAPE, CTRL, ALT
+    }
+
+    enum class KeyboardState {
+        LOWERCASE, UPPERCASE, CAPS_LOCK, SYMBOLS_1, SYMBOLS_2
+    }
+
+    private var listener: KeyboardListener? = null
+    private var currentState = KeyboardState.LOWERCASE
+    private var vibrationEnabled = true
+    private var keyHeight = 40
+    private var keySpacing = 2
+    private var fontSize = 13f
+
+    private val lowercaseRows = listOf(
+        listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
+        listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
+        listOf("SHIFT", "z", "x", "c", "v", "b", "n", "m", "BKSP"),
+        listOf("SYM", ",", "SPACE", ".", "ENTER")
+    )
+
+    private val uppercaseRows = listOf(
+        listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
+        listOf("A", "S", "D", "F", "G", "H", "J", "K", "L"),
+        listOf("SHIFT", "Z", "X", "C", "V", "B", "N", "M", "BKSP"),
+        listOf("SYM", ",", "SPACE", ".", "ENTER")
+    )
+
+    private val symbols1Rows = listOf(
+        listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
+        listOf("@", "#", "\$", "%", "&", "-", "+", "(", ")"),
+        listOf("SYM2", "*", "\"", "'", ":", ";", "!", "?", "BKSP"),
+        listOf("ABC", ",", "SPACE", ".", "ENTER")
+    )
+
+    private val symbols2Rows = listOf(
+        listOf("~", "`", "|", "^", "=", "{", "}", "[", "]", "\\"),
+        listOf("<", ">", "/", "_", "©", "®", "™", "°", "•"),
+        listOf("SYM1", "€", "£", "¥", "¢", "§", "¶", "∆", "BKSP"),
+        listOf("ABC", "_", "SPACE", "/", "ENTER")
+    )
+
+    private val arrowRow = listOf("TAB", "CTRL", "←", "↑", "↓", "→", "ESC")
+
+    init {
+        orientation = VERTICAL
+        setBackgroundColor(Color.parseColor("#1A1A1A"))
+        setPadding(4, 4, 4, 4)
+        buildKeyboard()
+    }
+
+    fun setKeyboardListener(l: KeyboardListener) { listener = l }
+    fun setVibrationEnabled(enabled: Boolean) { vibrationEnabled = enabled }
+
+    private fun buildKeyboard() {
+        removeAllViews()
+        val rows = when (currentState) {
+            KeyboardState.LOWERCASE -> lowercaseRows
+            KeyboardState.UPPERCASE, KeyboardState.CAPS_LOCK -> uppercaseRows
+            KeyboardState.SYMBOLS_1 -> symbols1Rows
+            KeyboardState.SYMBOLS_2 -> symbols2Rows
+        }
+        for ((rowIndex, row) in rows.withIndex()) { addView(createRow(row, rowIndex)) }
+        addView(createArrowRow())
+    }
+
+    private fun createRow(keys: List<String>, rowIndex: Int): LinearLayout {
+        val row = LinearLayout(context)
+        row.orientation = HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(keyHeight)).apply {
+            setMargins(0, dpToPx(keySpacing), 0, 0)
+        }
+        if (rowIndex == 1) row.setPadding(dpToPx(12), 0, dpToPx(12), 0)
+        for (key in keys) { row.addView(createKey(key, getKeyWeight(key))) }
+        return row
+    }
+
+    private fun createArrowRow(): LinearLayout {
+        val row = LinearLayout(context)
+        row.orientation = HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(keyHeight - 4)).apply {
+            setMargins(0, dpToPx(keySpacing + 2), 0, 0)
+        }
+        row.setBackgroundColor(Color.parseColor("#0D0D0D"))
+        for (key in arrowRow) { row.addView(createKey(key, getKeyWeight(key), isArrowRow = true)) }
+        return row
+    }
+
+    private fun getKeyWeight(key: String): Float = when (key) {
+        "SPACE" -> 4.5f
+        "SHIFT", "BKSP", "ENTER" -> 1.5f
+        "SYM", "SYM1", "SYM2", "ABC" -> 1.3f
+        "TAB", "CTRL", "ESC" -> 1.2f
+        else -> 1f
+    }
+
+    private fun createKey(key: String, weight: Float, isArrowRow: Boolean = false): View {
+        val container = FrameLayout(context)
+        val params = LayoutParams(0, LayoutParams.MATCH_PARENT, weight)
+        params.setMargins(dpToPx(keySpacing), 0, dpToPx(keySpacing), 0)
+        container.layoutParams = params
+
+        val keyView = TextView(context)
+        keyView.gravity = Gravity.CENTER
+        keyView.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isArrowRow) fontSize - 2 else fontSize)
+        keyView.setTextColor(Color.WHITE)
+        keyView.text = getDisplayText(key)
+
+        val bg = GradientDrawable()
+        bg.cornerRadius = dpToPx(6).toFloat()
+        bg.setColor(getKeyColor(key, isArrowRow))
+        keyView.background = bg
+        keyView.layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        container.addView(keyView)
+
+        container.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    bg.setColor(Color.parseColor("#4A4A4A"))
+                    keyView.background = bg
+                    if (vibrationEnabled) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    bg.setColor(getKeyColor(key, isArrowRow))
+                    keyView.background = bg
+                    if (event.action == MotionEvent.ACTION_UP) handleKeyPress(key)
+                }
+            }
+            true
+        }
+        if (key == "SHIFT") container.setOnLongClickListener { toggleCapsLock(); true }
+        return container
+    }
+
+    private fun getDisplayText(key: String): String = when (key) {
+        "SHIFT" -> if (currentState == KeyboardState.CAPS_LOCK) "⬆" else "⇧"
+        "BKSP" -> "⌫"; "ENTER" -> "↵"; "SPACE" -> "␣"
+        "SYM", "SYM1", "SYM2" -> "?123"; "ABC" -> "ABC"
+        "TAB" -> "⇥"; "CTRL" -> "Ctrl"; "ESC" -> "Esc"
+        "←" -> "◀"; "→" -> "▶"; "↑" -> "▲"; "↓" -> "▼"
+        else -> key
+    }
+
+    private fun getKeyColor(key: String, isArrowRow: Boolean): Int {
+        if (isArrowRow) return Color.parseColor("#252525")
+        return when (key) {
+            "SHIFT" -> when (currentState) {
+                KeyboardState.CAPS_LOCK -> Color.parseColor("#3DDC84")
+                KeyboardState.UPPERCASE -> Color.parseColor("#4A90D9")
+                else -> Color.parseColor("#3A3A3A")
+            }
+            "BKSP", "ENTER", "SYM", "SYM1", "SYM2", "ABC" -> Color.parseColor("#3A3A3A")
+            "SPACE" -> Color.parseColor("#2D2D2D")
+            else -> Color.parseColor("#2D2D2D")
+        }
+    }
+
+    private fun handleKeyPress(key: String) {
+        when (key) {
+            "SHIFT" -> toggleShift()
+            "BKSP" -> listener?.onSpecialKey(SpecialKey.BACKSPACE)
+            "ENTER" -> listener?.onSpecialKey(SpecialKey.ENTER)
+            "SPACE" -> listener?.onSpecialKey(SpecialKey.SPACE)
+            "TAB" -> listener?.onSpecialKey(SpecialKey.TAB)
+            "CTRL" -> listener?.onSpecialKey(SpecialKey.CTRL)
+            "ESC" -> listener?.onSpecialKey(SpecialKey.ESCAPE)
+            "←" -> listener?.onSpecialKey(SpecialKey.ARROW_LEFT)
+            "→" -> listener?.onSpecialKey(SpecialKey.ARROW_RIGHT)
+            "↑" -> listener?.onSpecialKey(SpecialKey.ARROW_UP)
+            "↓" -> listener?.onSpecialKey(SpecialKey.ARROW_DOWN)
+            "SYM", "SYM1" -> { currentState = KeyboardState.SYMBOLS_1; buildKeyboard() }
+            "SYM2" -> { currentState = KeyboardState.SYMBOLS_2; buildKeyboard() }
+            "ABC" -> { currentState = KeyboardState.LOWERCASE; buildKeyboard() }
+            else -> {
+                listener?.onTextInput(key)
+                if (currentState == KeyboardState.UPPERCASE) { currentState = KeyboardState.LOWERCASE; buildKeyboard() }
+            }
+        }
+    }
+
+    private fun toggleShift() {
+        currentState = when (currentState) {
+            KeyboardState.LOWERCASE -> KeyboardState.UPPERCASE
+            KeyboardState.UPPERCASE -> KeyboardState.LOWERCASE
+            KeyboardState.CAPS_LOCK -> KeyboardState.LOWERCASE
+            else -> currentState
+        }
+        buildKeyboard()
+    }
+
+    private fun toggleCapsLock() {
+        currentState = when (currentState) {
+            KeyboardState.LOWERCASE, KeyboardState.UPPERCASE -> KeyboardState.CAPS_LOCK
+            KeyboardState.CAPS_LOCK -> KeyboardState.LOWERCASE
+            else -> currentState
+        }
+        if (vibrationEnabled) vibrate()
+        buildKeyboard()
+    }
+
+    private fun vibrate() {
+        val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            v.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else { @Suppress("DEPRECATION") v.vibrate(30) }
+    }
+
+    private fun dpToPx(dp: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), resources.displayMetrics
+    ).roundToInt()
+}
 ```
 
 ## File: app/src/main/java/com/example/coverscreentester/ShizukuBinder.java
@@ -1389,6 +2786,404 @@ Open the app menu (Bottom-Left handle) to configure:
 
 ## ⚠️ Disclaimer
 This project is currently in **Alpha**. It is intended for testing and development purposes. Use at your own risk.
+```
+
+## File: app/src/main/java/com/example/coverscreentester/KeyboardOverlay.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.content.Context
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.util.Log
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
+import kotlin.math.max
+
+class KeyboardOverlay(
+    private val context: Context,
+    private val windowManager: WindowManager,
+    private val shellService: IShellService?,
+    private val targetDisplayId: Int
+) : KeyboardView.KeyboardListener {
+
+    private var keyboardContainer: FrameLayout? = null
+    private var keyboardView: KeyboardView? = null
+    private var keyboardParams: WindowManager.LayoutParams? = null
+    private var isVisible = false
+
+    private var isMoving = false
+    private var isResizing = false
+    private var initialTouchX = 0f
+    private var initialTouchY = 0f
+    private var initialWindowX = 0
+    private var initialWindowY = 0
+    private var initialWidth = 0
+    private var initialHeight = 0
+
+    private val TAG = "KeyboardOverlay"
+    private var keyboardWidth = 500
+    private var keyboardHeight = 260
+    private var screenWidth = 720
+    private var screenHeight = 748
+    
+    // Store which display we're on for per-display persistence
+    private var currentDisplayId = 0
+
+    fun setScreenDimensions(width: Int, height: Int, displayId: Int = 0) {
+        screenWidth = width
+        screenHeight = height
+        currentDisplayId = displayId
+        
+        // Load saved size for this display, or use defaults
+        loadKeyboardSizeForDisplay(displayId)
+        
+        // If no saved size, calculate defaults
+        val prefs = context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        if (!prefs.contains("keyboard_width_d$displayId")) {
+            keyboardWidth = (width * 0.95f).toInt().coerceIn(300, 650)
+            keyboardHeight = (height * 0.36f).toInt().coerceIn(180, 320)
+        }
+    }
+
+    fun updateTargetDisplay(newTargetId: Int): KeyboardOverlay {
+        return KeyboardOverlay(context, windowManager, shellService, newTargetId).also {
+            it.screenWidth = screenWidth
+            it.screenHeight = screenHeight
+            it.currentDisplayId = currentDisplayId
+            it.loadKeyboardSizeForDisplay(currentDisplayId)
+        }
+    }
+
+    fun show() {
+        if (isVisible) return
+        try { createKeyboardWindow(); isVisible = true } 
+        catch (e: Exception) { Log.e(TAG, "Failed to show keyboard", e) }
+    }
+
+    fun hide() {
+        if (!isVisible) return
+        try { windowManager.removeView(keyboardContainer); keyboardContainer = null; keyboardView = null; isVisible = false } 
+        catch (e: Exception) { Log.e(TAG, "Failed to hide keyboard", e) }
+    }
+
+    fun toggle() { if (isVisible) hide() else show() }
+    fun isShowing(): Boolean = isVisible
+
+    private fun createKeyboardWindow() {
+        keyboardContainer = FrameLayout(context)
+        val containerBg = GradientDrawable()
+        containerBg.setColor(Color.parseColor("#1A1A1A"))
+        containerBg.cornerRadius = 16f
+        containerBg.setStroke(2, Color.parseColor("#3DDC84"))
+        keyboardContainer?.background = containerBg
+
+        keyboardView = KeyboardView(context)
+        keyboardView?.setKeyboardListener(this)
+        val prefs = context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        keyboardView?.setVibrationEnabled(prefs.getBoolean("vibrate", true))
+
+        val kbParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        kbParams.setMargins(6, 28, 6, 6)
+        keyboardContainer?.addView(keyboardView, kbParams)
+
+        addDragHandle()
+        addResizeHandle()
+        addCloseButton()
+        addTargetLabel()
+
+        // Load saved position for this display
+        val savedX = prefs.getInt("keyboard_x_d$currentDisplayId", (screenWidth - keyboardWidth) / 2)
+        val savedY = prefs.getInt("keyboard_y_d$currentDisplayId", screenHeight - keyboardHeight - 10)
+
+        keyboardParams = WindowManager.LayoutParams(
+            keyboardWidth, keyboardHeight,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        keyboardParams?.gravity = Gravity.TOP or Gravity.LEFT
+        keyboardParams?.x = savedX
+        keyboardParams?.y = savedY
+        windowManager.addView(keyboardContainer, keyboardParams)
+    }
+
+    private fun addDragHandle() {
+        val handle = FrameLayout(context)
+        val handleParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 28)
+        handleParams.gravity = Gravity.TOP
+        val indicator = View(context)
+        val indicatorBg = GradientDrawable()
+        indicatorBg.setColor(Color.parseColor("#555555"))
+        indicatorBg.cornerRadius = 3f
+        indicator.background = indicatorBg
+        val indicatorParams = FrameLayout.LayoutParams(50, 5)
+        indicatorParams.gravity = Gravity.CENTER
+        indicatorParams.topMargin = 8
+        handle.addView(indicator, indicatorParams)
+        handle.setOnTouchListener { _, event -> handleDrag(event); true }
+        keyboardContainer?.addView(handle, handleParams)
+    }
+
+    private fun addResizeHandle() {
+        val handle = FrameLayout(context)
+        val handleParams = FrameLayout.LayoutParams(36, 36)
+        handleParams.gravity = Gravity.BOTTOM or Gravity.RIGHT
+        val indicator = View(context)
+        val indicatorBg = GradientDrawable()
+        indicatorBg.setColor(Color.parseColor("#3DDC84"))
+        indicatorBg.cornerRadius = 4f
+        indicator.background = indicatorBg
+        indicator.alpha = 0.7f
+        val indicatorParams = FrameLayout.LayoutParams(14, 14)
+        indicatorParams.gravity = Gravity.BOTTOM or Gravity.RIGHT
+        indicatorParams.setMargins(0, 0, 6, 6)
+        handle.addView(indicator, indicatorParams)
+        handle.setOnTouchListener { _, event -> handleResize(event); true }
+        keyboardContainer?.addView(handle, handleParams)
+    }
+
+    private fun addCloseButton() {
+        val button = FrameLayout(context)
+        val buttonParams = FrameLayout.LayoutParams(28, 28)
+        buttonParams.gravity = Gravity.TOP or Gravity.RIGHT
+        buttonParams.setMargins(0, 2, 4, 0)
+        val closeText = TextView(context)
+        closeText.text = "X"
+        closeText.setTextColor(Color.parseColor("#FF5555"))
+        closeText.textSize = 12f
+        closeText.gravity = Gravity.CENTER
+        button.addView(closeText, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        button.setOnClickListener { hide() }
+        keyboardContainer?.addView(button, buttonParams)
+    }
+
+    private fun addTargetLabel() {
+        val label = TextView(context)
+        label.text = "Display $targetDisplayId"
+        label.setTextColor(Color.parseColor("#888888"))
+        label.textSize = 9f
+        val labelParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+        labelParams.gravity = Gravity.TOP or Gravity.LEFT
+        labelParams.setMargins(8, 6, 0, 0)
+        keyboardContainer?.addView(label, labelParams)
+    }
+
+    private fun handleDrag(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> { isMoving = true; initialTouchX = event.rawX; initialTouchY = event.rawY; initialWindowX = keyboardParams?.x ?: 0; initialWindowY = keyboardParams?.y ?: 0 }
+            MotionEvent.ACTION_MOVE -> { if (isMoving) { keyboardParams?.x = initialWindowX + (event.rawX - initialTouchX).toInt(); keyboardParams?.y = initialWindowY + (event.rawY - initialTouchY).toInt(); try { windowManager.updateViewLayout(keyboardContainer, keyboardParams) } catch (e: Exception) {} } }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { isMoving = false; saveKeyboardPosition() }
+        }
+        return true
+    }
+
+    private fun handleResize(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> { isResizing = true; initialTouchX = event.rawX; initialTouchY = event.rawY; initialWidth = keyboardParams?.width ?: keyboardWidth; initialHeight = keyboardParams?.height ?: keyboardHeight }
+            MotionEvent.ACTION_MOVE -> { if (isResizing) { keyboardParams?.width = max(280, initialWidth + (event.rawX - initialTouchX).toInt()); keyboardParams?.height = max(180, initialHeight + (event.rawY - initialTouchY).toInt()); keyboardWidth = keyboardParams?.width ?: keyboardWidth; keyboardHeight = keyboardParams?.height ?: keyboardHeight; try { windowManager.updateViewLayout(keyboardContainer, keyboardParams) } catch (e: Exception) {} } }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { isResizing = false; saveKeyboardSize() }
+        }
+        return true
+    }
+
+    private fun saveKeyboardSize() {
+        context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit()
+            .putInt("keyboard_width_d$currentDisplayId", keyboardWidth)
+            .putInt("keyboard_height_d$currentDisplayId", keyboardHeight)
+            .apply()
+    }
+
+    private fun saveKeyboardPosition() {
+        context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit()
+            .putInt("keyboard_x_d$currentDisplayId", keyboardParams?.x ?: 0)
+            .putInt("keyboard_y_d$currentDisplayId", keyboardParams?.y ?: 0)
+            .apply()
+    }
+
+    private fun loadKeyboardSizeForDisplay(displayId: Int) {
+        val prefs = context.getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        keyboardWidth = prefs.getInt("keyboard_width_d$displayId", keyboardWidth)
+        keyboardHeight = prefs.getInt("keyboard_height_d$displayId", keyboardHeight)
+    }
+
+    override fun onKeyPress(keyCode: Int, char: Char?) { injectKey(keyCode) }
+    
+    override fun onTextInput(text: String) {
+        if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
+        
+        Thread {
+            try {
+                val escaped = escapeForShell(text)
+                val cmd = "input -d $targetDisplayId text $escaped"
+                shellService.runCommand(cmd)
+            } catch (e: Exception) { 
+                Log.e(TAG, "Text injection failed: $text", e) 
+            }
+        }.start()
+    }
+
+    override fun onSpecialKey(key: KeyboardView.SpecialKey) {
+        val keyCode = when (key) {
+            KeyboardView.SpecialKey.BACKSPACE -> KeyEvent.KEYCODE_DEL
+            KeyboardView.SpecialKey.ENTER -> KeyEvent.KEYCODE_ENTER
+            KeyboardView.SpecialKey.SPACE -> KeyEvent.KEYCODE_SPACE
+            KeyboardView.SpecialKey.TAB -> KeyEvent.KEYCODE_TAB
+            KeyboardView.SpecialKey.ESCAPE -> KeyEvent.KEYCODE_ESCAPE
+            KeyboardView.SpecialKey.ARROW_UP -> KeyEvent.KEYCODE_DPAD_UP
+            KeyboardView.SpecialKey.ARROW_DOWN -> KeyEvent.KEYCODE_DPAD_DOWN
+            KeyboardView.SpecialKey.ARROW_LEFT -> KeyEvent.KEYCODE_DPAD_LEFT
+            KeyboardView.SpecialKey.ARROW_RIGHT -> KeyEvent.KEYCODE_DPAD_RIGHT
+            KeyboardView.SpecialKey.HOME -> KeyEvent.KEYCODE_MOVE_HOME
+            KeyboardView.SpecialKey.END -> KeyEvent.KEYCODE_MOVE_END
+            KeyboardView.SpecialKey.DELETE -> KeyEvent.KEYCODE_FORWARD_DEL
+            KeyboardView.SpecialKey.SHIFT -> KeyEvent.KEYCODE_SHIFT_LEFT
+            KeyboardView.SpecialKey.CTRL -> KeyEvent.KEYCODE_CTRL_LEFT
+            KeyboardView.SpecialKey.ALT -> KeyEvent.KEYCODE_ALT_LEFT
+            else -> return
+        }
+        injectKey(keyCode)
+    }
+
+    private fun injectKey(keyCode: Int) {
+        if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
+        Thread {
+            try {
+                val cmd = "input -d $targetDisplayId keyevent $keyCode"
+                shellService.runCommand(cmd)
+            } catch (e: Exception) { Log.e(TAG, "Key injection failed", e) }
+        }.start()
+    }
+    
+    private fun escapeForShell(text: String): String {
+        val sb = StringBuilder()
+        for (c in text) {
+            when (c) {
+                ' ' -> sb.append("%s")
+                '\'' -> sb.append("'")
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '`' -> sb.append("\\`")
+                '$' -> sb.append("\\$")
+                '&' -> sb.append("\\&")
+                '|' -> sb.append("\\|")
+                ';' -> sb.append("\\;")
+                '(' -> sb.append("\\(")
+                ')' -> sb.append("\\)")
+                '<' -> sb.append("\\<")
+                '>' -> sb.append("\\>")
+                '!' -> sb.append("\\!")
+                '?' -> sb.append("\\?")
+                '*' -> sb.append("\\*")
+                '[' -> sb.append("\\[")
+                ']' -> sb.append("\\]")
+                '{' -> sb.append("\\{")
+                '}' -> sb.append("\\}")
+                '#' -> sb.append("\\#")
+                '~' -> sb.append("\\~")
+                '^' -> sb.append("\\^")
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+}
+```
+
+## File: app/src/main/res/xml/accessibility_service_config.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="false"
+    android:canPerformGestures="false" 
+    android:canRequestFilterKeyEvents="true" 
+    android:accessibilityFlags="flagRequestTouchExplorationMode|flagRequestFilterKeyEvents" />
+```
+
+## File: app/build.gradle.kts
+```
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+android {
+    namespace = "com.example.coverscreentester"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.example.coverscreentester"
+        minSdk = 30
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+        aidl = true // <--- CRITICAL: Must be enabled
+    }
+
+    // Fixes "Unresolved Reference" for AIDL classes
+    sourceSets {
+        getByName("main") {
+            aidl.srcDirs(listOf("src/main/aidl"))
+            java.srcDirs(layout.buildDirectory.dir("generated/source/aidl/debug"))
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // Shizuku
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+    implementation("dev.rikka.shizuku:aidl:13.1.5")
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.constraintlayout)
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+}
+```
+
+## File: gradle.properties
+```
+org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
 ```
 
 ## File: app/src/main/res/layout/activity_settings.xml
@@ -1507,6 +3302,19 @@ This project is currently in **Alpha**. It is intended for testing and developme
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="Cursor Size"
+            android:textColor="#FFFFFF"/>
+        <SeekBar
+            android:id="@+id/seekBarCursorSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="150"
+            android:progress="50"
+            android:layout_marginBottom="16dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:text="Border Visibility (Alpha)"
             android:textColor="#FFFFFF"/>
         <SeekBar
@@ -1599,96 +3407,6 @@ This project is currently in **Alpha**. It is intended for testing and developme
 </ScrollView>
 ```
 
-## File: app/src/main/res/xml/accessibility_service_config.xml
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/accessibility_service_description"
-    android:accessibilityEventTypes="typeAllMask"
-    android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="100"
-    android:canRetrieveWindowContent="false"
-    android:canPerformGestures="false" 
-    android:canRequestFilterKeyEvents="true" 
-    android:accessibilityFlags="flagRequestTouchExplorationMode|flagRequestFilterKeyEvents" />
-```
-
-## File: app/build.gradle.kts
-```
-plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-}
-
-android {
-    namespace = "com.example.coverscreentester"
-    compileSdk = 34
-
-    defaultConfig {
-        applicationId = "com.example.coverscreentester"
-        minSdk = 30
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    buildFeatures {
-        viewBinding = true
-        buildConfig = true
-        aidl = true // <--- CRITICAL: Must be enabled
-    }
-
-    // Fixes "Unresolved Reference" for AIDL classes
-    sourceSets {
-        getByName("main") {
-            aidl.srcDirs(listOf("src/main/aidl"))
-            java.srcDirs(layout.buildDirectory.dir("generated/source/aidl/debug"))
-        }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    // Shizuku
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("dev.rikka.shizuku:aidl:13.1.5")
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    implementation(libs.androidx.activity)
-    implementation(libs.androidx.constraintlayout)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-}
-```
-
-## File: gradle.properties
-```
-org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
-```
-
 ## File: app/src/main/java/com/example/coverscreentester/SettingsActivity.kt
 ```kotlin
 package com.example.coverscreentester
@@ -1722,6 +3440,7 @@ class SettingsActivity : Activity() {
         val swVPos = findViewById<Switch>(R.id.switchVPosLeft)
         val swHPos = findViewById<Switch>(R.id.switchHPosTop)
         
+        val seekCursorSize = findViewById<SeekBar>(R.id.seekBarCursorSize)
         val seekAlpha = findViewById<SeekBar>(R.id.seekBarAlpha)
         val seekHandleSize = findViewById<SeekBar>(R.id.seekBarHandleSize)
         val seekScrollVisual = findViewById<SeekBar>(R.id.seekBarScrollVisual)
@@ -1746,6 +3465,7 @@ class SettingsActivity : Activity() {
         swVPos.isChecked = prefs.getBoolean("v_pos_left", false)
         swHPos.isChecked = prefs.getBoolean("h_pos_top", false)
         
+        seekCursorSize.progress = prefs.getInt("cursor_size", 50)
         seekAlpha.progress = prefs.getInt("alpha", 200)
         seekHandleSize.progress = prefs.getInt("handle_size", 60)
         seekScrollVisual.progress = prefs.getInt("scroll_visual_size", 4)
@@ -1769,6 +3489,7 @@ class SettingsActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar) {}
         })
         
+        seekCursorSize.setOnSeekBarChangeListener(createPreviewListener("cursor_size"))
         seekAlpha.setOnSeekBarChangeListener(createPreviewListener("alpha"))
         seekHandleSize.setOnSeekBarChangeListener(createPreviewListener("handle_size"))
         seekScrollVisual.setOnSeekBarChangeListener(createPreviewListener("scroll_visual"))
@@ -1786,6 +3507,7 @@ class SettingsActivity : Activity() {
                 .putBoolean("reverse_scroll", swReverse.isChecked)
                 .putBoolean("v_pos_left", swVPos.isChecked)
                 .putBoolean("h_pos_top", swHPos.isChecked)
+                .putInt("cursor_size", seekCursorSize.progress)
                 .putInt("alpha", seekAlpha.progress)
                 .putInt("handle_size", seekHandleSize.progress)
                 .putInt("scroll_visual_size", seekScrollVisual.progress)
@@ -1831,274 +3553,10 @@ interface IShellService {
     void setWindowingMode(int taskId, int mode);
     void resizeTask(int taskId, int left, int top, int right, int bottom);
     String runCommand(String cmd);
-}
-```
-
-## File: app/src/main/java/com/example/coverscreentester/ShellUserService.kt
-```kotlin
-package com.example.coverscreentester
-
-import android.os.SystemClock
-import android.util.Log
-import android.view.InputDevice
-import android.view.InputEvent
-import android.view.KeyEvent
-import android.view.MotionEvent
-import com.example.coverscreentester.IShellService
-import java.lang.reflect.Method
-
-class ShellUserService : IShellService.Stub() {
-
-    private val TAG = "ShellUserService"
-    private lateinit var inputManager: Any
-    private lateinit var injectInputEventMethod: Method
-    private val INJECT_MODE_ASYNC = 0
-
-    init {
-        setupReflection()
-    }
-
-    private fun setupReflection() {
-        try {
-            val imClass = Class.forName("android.hardware.input.InputManager")
-            val getInstance = imClass.getMethod("getInstance")
-            inputManager = getInstance.invoke(null)!!
-
-            injectInputEventMethod = imClass.getMethod(
-                "injectInputEvent",
-                InputEvent::class.java,
-                Int::class.javaPrimitiveType
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to setup reflection", e)
-        }
-    }
-
-    // --- WINDOW MANAGEMENT ---
     
-    override fun setWindowingMode(taskId: Int, mode: Int) {
-        try {
-            // Mode 5 = Freeform, 1 = Fullscreen
-            Runtime.getRuntime().exec("am task set-windowing-mode  ").waitFor()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to set window mode", e)
-        }
-    }
-
-    override fun resizeTask(taskId: Int, left: Int, top: Int, right: Int, bottom: Int) {
-        try {
-            Runtime.getRuntime().exec("am task resize     ")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to resize task", e)
-        }
-    }
-
-    override fun runCommand(cmd: String?): String {
-        try {
-            if (cmd != null) {
-                Runtime.getRuntime().exec(cmd)
-            }
-        } catch (e: Exception) {}
-        return "" 
-    }
-
-    // --- INPUT INJECTION (Existing) ---
-
-    override fun injectKey(keyCode: Int, action: Int) {
-        if (action == KeyEvent.ACTION_DOWN) {
-            try {
-                Runtime.getRuntime().exec("input keyevent ")
-            } catch (e: Exception) {
-                Log.e(TAG, "Key injection failed", e)
-            }
-        }
-    }
-
-    override fun execClick(x: Float, y: Float, displayId: Int) {
-        val downTime = SystemClock.uptimeMillis()
-        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY)
-        try { Thread.sleep(50) } catch (e: InterruptedException) {}
-        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
-    }
-
-    override fun execRightClick(x: Float, y: Float, displayId: Int) {
-        val downTime = SystemClock.uptimeMillis()
-        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY)
-        try { Thread.sleep(50) } catch (e: InterruptedException) {}
-        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
-    }
-
-    override fun injectMouse(action: Int, x: Float, y: Float, displayId: Int, source: Int, buttonState: Int, downTime: Long) {
-        injectInternal(action, x, y, displayId, downTime, SystemClock.uptimeMillis(), source, buttonState)
-    }
-
-    override fun injectScroll(x: Float, y: Float, vDistance: Float, hDistance: Float, displayId: Int) {
-        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
-        
-        val now = SystemClock.uptimeMillis()
-        val props = MotionEvent.PointerProperties()
-        props.id = 0
-        props.toolType = MotionEvent.TOOL_TYPE_MOUSE
-
-        val coords = MotionEvent.PointerCoords()
-        coords.x = x
-        coords.y = y
-        coords.pressure = 1.0f
-        coords.size = 1.0f
-        
-        coords.setAxisValue(MotionEvent.AXIS_VSCROLL, vDistance)
-        coords.setAxisValue(MotionEvent.AXIS_HSCROLL, hDistance)
-
-        var event: MotionEvent? = null
-        try {
-            event = MotionEvent.obtain(
-                now, now,
-                MotionEvent.ACTION_SCROLL,
-                1, arrayOf(props), arrayOf(coords),
-                0, 0, 1.0f, 1.0f, 0, 0, 
-                InputDevice.SOURCE_MOUSE, 0
-            )
-            setDisplayId(event, displayId)
-            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
-        } catch (e: Exception) {
-            Log.e(TAG, "Scroll Injection failed", e)
-        } finally {
-            event?.recycle()
-        }
-    }
-
-    private fun setDisplayId(event: MotionEvent, displayId: Int) {
-        try {
-            val method = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-            method.invoke(event, displayId)
-        } catch (e: Exception) {}
-    }
-
-    private fun injectInternal(action: Int, x: Float, y: Float, displayId: Int, downTime: Long, eventTime: Long, source: Int, buttonState: Int) {
-        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
-        val props = MotionEvent.PointerProperties()
-        props.id = 0
-        props.toolType = if (source == InputDevice.SOURCE_MOUSE) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
-        val coords = MotionEvent.PointerCoords()
-        coords.x = x
-        coords.y = y
-        coords.pressure = if (buttonState != 0 || action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) 1.0f else 0.0f
-        coords.size = 1.0f
-        var event: MotionEvent? = null
-        try {
-            event = MotionEvent.obtain(downTime, eventTime, action, 1, arrayOf(props), arrayOf(coords), 0, buttonState, 1.0f, 1.0f, 0, 0, source, 0)
-            setDisplayId(event, displayId)
-            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
-        } catch (e: Exception) { Log.e(TAG, "Injection failed", e) } finally { event?.recycle() }
-    }
+    // NEW: Key injection on specific display
+    void injectKeyOnDisplay(int keyCode, int action, int displayId);
 }
-```
-
-## File: app/src/main/res/layout/activity_main.xml
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#121212"
-    android:fillViewport="true">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:padding="24dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="CoverScreen Trackpad"
-            android:textSize="24sp"
-            android:textStyle="bold"
-            android:textColor="#FFFFFF"
-            android:layout_marginBottom="24dp"/>
-
-        <TextView
-            android:id="@+id/text_status"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Checking Shizuku..."
-            android:textColor="#AAAAAA"
-            android:layout_marginBottom="16dp"/>
-
-        <Button
-            android:id="@+id/btn_toggle"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Start Trackpad"
-            android:backgroundTint="#3DDC84"
-            android:textColor="#000000"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_lock"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Position: Unlocked"
-            android:drawableStart="@drawable/ic_lock_open"
-            android:drawablePadding="10dp"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
-            android:backgroundTint="#3DDC84"
-            android:textColor="#000000"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_profiles"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Layout Profiles (Auto-Resize)"
-            android:backgroundTint="#FF9800"
-            android:textColor="#000000"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_manual_adjust"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Manual Adjustment (Fine Tune)"
-            android:backgroundTint="#00ACC1"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_settings"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Configuration / Settings"
-            android:backgroundTint="#444444"
-            android:textColor="#FFFFFF"
-            android:layout_marginBottom="8dp"/>
-
-        <Button
-            android:id="@+id/btn_help"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Help / Instructions"
-            android:backgroundTint="#0066CC"
-            android:textColor="#FFFFFF"
-            android:layout_marginBottom="24dp"/>
-
-        <Button
-            android:id="@+id/btn_close"
-            android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="Close App"
-            android:backgroundTint="#990000"
-            android:textColor="#FFFFFF"/>
-
-    </LinearLayout>
-</ScrollView>
 ```
 
 ## File: app/src/main/AndroidManifest.xml
@@ -2188,6 +3646,288 @@ class ShellUserService : IShellService.Stub() {
 </manifest>
 ```
 
+## File: app/src/main/java/com/example/coverscreentester/ShellUserService.kt
+```kotlin
+package com.example.coverscreentester
+
+import android.os.SystemClock
+import android.util.Log
+import android.view.InputDevice
+import android.view.InputEvent
+import android.view.KeyEvent
+import android.view.MotionEvent
+import com.example.coverscreentester.IShellService
+import java.lang.reflect.Method
+
+class ShellUserService : IShellService.Stub() {
+
+    private val TAG = "ShellUserService"
+    private lateinit var inputManager: Any
+    private lateinit var injectInputEventMethod: Method
+    private val INJECT_MODE_ASYNC = 0
+
+    init {
+        setupReflection()
+    }
+
+    private fun setupReflection() {
+        try {
+            val imClass = Class.forName("android.hardware.input.InputManager")
+            val getInstance = imClass.getMethod("getInstance")
+            inputManager = getInstance.invoke(null)!!
+
+            injectInputEventMethod = imClass.getMethod(
+                "injectInputEvent",
+                InputEvent::class.java,
+                Int::class.javaPrimitiveType
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to setup reflection", e)
+        }
+    }
+
+    override fun setWindowingMode(taskId: Int, mode: Int) {
+        try { Runtime.getRuntime().exec("am task set-windowing-mode $taskId $mode").waitFor() } catch (e: Exception) { Log.e(TAG, "Failed to set window mode", e) }
+    }
+
+    override fun resizeTask(taskId: Int, left: Int, top: Int, right: Int, bottom: Int) {
+        try { Runtime.getRuntime().exec("am task resize $taskId $left $top $right $bottom") } catch (e: Exception) { Log.e(TAG, "Failed to resize task", e) }
+    }
+
+    override fun runCommand(cmd: String?): String {
+        try { if (cmd != null) { Runtime.getRuntime().exec(cmd) } } catch (e: Exception) {}
+        return "" 
+    }
+
+    override fun injectKey(keyCode: Int, action: Int) {
+        if (action == KeyEvent.ACTION_DOWN) {
+            try { Runtime.getRuntime().exec("input keyevent $keyCode") } catch (e: Exception) { Log.e(TAG, "Key injection failed", e) }
+        }
+    }
+
+    override fun injectKeyOnDisplay(keyCode: Int, action: Int, displayId: Int) {
+        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
+        val now = SystemClock.uptimeMillis()
+        val event = KeyEvent(now, now, action, keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        try {
+            val method = InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+            method.invoke(event, displayId)
+            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
+        } catch (e: Exception) { Log.e(TAG, "Key Injection on Display Failed", e) }
+    }
+
+    override fun execClick(x: Float, y: Float, displayId: Int) {
+        val downTime = SystemClock.uptimeMillis()
+        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY)
+        try { Thread.sleep(50) } catch (e: InterruptedException) {}
+        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
+    }
+
+    override fun execRightClick(x: Float, y: Float, displayId: Int) {
+        val downTime = SystemClock.uptimeMillis()
+        injectInternal(MotionEvent.ACTION_DOWN, x, y, displayId, downTime, downTime, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY)
+        try { Thread.sleep(50) } catch (e: InterruptedException) {}
+        injectInternal(MotionEvent.ACTION_UP, x, y, displayId, downTime, SystemClock.uptimeMillis(), InputDevice.SOURCE_MOUSE, 0)
+    }
+
+    override fun injectMouse(action: Int, x: Float, y: Float, displayId: Int, source: Int, buttonState: Int, downTime: Long) {
+        injectInternal(action, x, y, displayId, downTime, SystemClock.uptimeMillis(), source, buttonState)
+    }
+
+    override fun injectScroll(x: Float, y: Float, vDistance: Float, hDistance: Float, displayId: Int) {
+        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
+        val now = SystemClock.uptimeMillis()
+        val props = MotionEvent.PointerProperties(); props.id = 0; props.toolType = MotionEvent.TOOL_TYPE_MOUSE
+        val coords = MotionEvent.PointerCoords(); coords.x = x; coords.y = y; coords.pressure = 1.0f; coords.size = 1.0f
+        coords.setAxisValue(MotionEvent.AXIS_VSCROLL, vDistance)
+        coords.setAxisValue(MotionEvent.AXIS_HSCROLL, hDistance)
+        var event: MotionEvent? = null
+        try {
+            event = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1, arrayOf(props), arrayOf(coords), 0, 0, 1.0f, 1.0f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+            setDisplayId(event, displayId)
+            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
+        } catch (e: Exception) { Log.e(TAG, "Scroll Injection failed", e) } finally { event?.recycle() }
+    }
+
+    private fun setDisplayId(event: MotionEvent, displayId: Int) {
+        try {
+            val method = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+            method.invoke(event, displayId)
+        } catch (e: Exception) {}
+    }
+
+    private fun injectInternal(action: Int, x: Float, y: Float, displayId: Int, downTime: Long, eventTime: Long, source: Int, buttonState: Int) {
+        if (!this::inputManager.isInitialized || !this::injectInputEventMethod.isInitialized) return
+        val props = MotionEvent.PointerProperties(); props.id = 0
+        props.toolType = if (source == InputDevice.SOURCE_MOUSE) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
+        val coords = MotionEvent.PointerCoords(); coords.x = x; coords.y = y
+        coords.pressure = if (buttonState != 0 || action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) 1.0f else 0.0f; coords.size = 1.0f
+        var event: MotionEvent? = null
+        try {
+            event = MotionEvent.obtain(downTime, eventTime, action, 1, arrayOf(props), arrayOf(coords), 0, buttonState, 1.0f, 1.0f, 0, 0, source, 0)
+            setDisplayId(event, displayId)
+            injectInputEventMethod.invoke(inputManager, event, INJECT_MODE_ASYNC)
+        } catch (e: Exception) { Log.e(TAG, "Injection failed", e) } finally { event?.recycle() }
+    }
+}
+```
+
+## File: app/src/main/res/layout/activity_main.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#121212"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CoverScreen Trackpad"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:id="@+id/text_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Checking Shizuku..."
+            android:textColor="#AAAAAA"
+            android:layout_marginBottom="16dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            
+            <Button
+                android:id="@+id/btn_toggle"
+                android:layout_width="0dp"
+                android:layout_height="50dp"
+                android:layout_weight="1"
+                android:text="Start Trackpad"
+                android:backgroundTint="#3DDC84"
+                android:textColor="#000000"
+                android:textStyle="bold"
+                android:layout_marginEnd="4dp"/>
+                
+            <Button
+                android:id="@+id/btn_hide_app"
+                android:layout_width="0dp"
+                android:layout_height="50dp"
+                android:layout_weight="1"
+                android:text="Hide App"
+                android:backgroundTint="#607D8B"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:layout_marginStart="4dp"/>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_lock"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Position: Unlocked"
+            android:drawableStart="@drawable/ic_lock_open"
+            android:drawablePadding="10dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:backgroundTint="#3DDC84"
+            android:textColor="#000000"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_target_switch"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Target: Switch Local/Remote"
+            android:backgroundTint="#6200EE"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+            
+        <Button
+            android:id="@+id/btn_reset_cursor"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Reset Cursor Position"
+            android:backgroundTint="#D32F2F"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_force_keyboard"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Toggle Custom Keyboard"
+            android:backgroundTint="#9C27B0"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_profiles"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Layout Profiles (Auto-Resize)"
+            android:backgroundTint="#FF9800"
+            android:textColor="#000000"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_manual_adjust"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Manual Adjustment (Fine Tune)"
+            android:backgroundTint="#00ACC1"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_settings"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Configuration / Settings"
+            android:backgroundTint="#444444"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_help"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Help / Instructions"
+            android:backgroundTint="#0066CC"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="24dp"/>
+
+        <Button
+            android:id="@+id/btn_close"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:text="Close App"
+            android:backgroundTint="#990000"
+            android:textColor="#FFFFFF"/>
+
+    </LinearLayout>
+</ScrollView>
+```
+
 ## File: app/src/main/java/com/example/coverscreentester/MainActivity.kt
 ```kotlin
 package com.example.coverscreentester
@@ -2210,14 +3950,23 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
     private lateinit var toggleButton: Button
+    private lateinit var hideAppButton: Button
     private lateinit var lockButton: Button
     private lateinit var profilesButton: Button
     private lateinit var settingsButton: Button
     private lateinit var helpButton: Button
     private lateinit var closeButton: Button
     private lateinit var btnManualAdjust: Button
+    private lateinit var btnTargetSwitch: Button
+    private lateinit var btnResetCursor: Button
+    private lateinit var btnForceKeyboard: Button
     
     private var lastKnownDisplayId = -1
+    
+    // For 5x tap debug mode toggle
+    private var resetCursorTapCount = 0
+    private var lastResetCursorTapTime = 0L
+    private val TAP_TIMEOUT = 1500L // 1.5 seconds to complete 5 taps
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -2225,12 +3974,55 @@ class MainActivity : AppCompatActivity() {
 
         statusText = findViewById(R.id.text_status)
         toggleButton = findViewById(R.id.btn_toggle)
+        hideAppButton = findViewById(R.id.btn_hide_app)
         lockButton = findViewById(R.id.btn_lock)
         profilesButton = findViewById(R.id.btn_profiles)
         settingsButton = findViewById(R.id.btn_settings)
         helpButton = findViewById(R.id.btn_help)
         closeButton = findViewById(R.id.btn_close)
         btnManualAdjust = findViewById(R.id.btn_manual_adjust)
+        
+        btnTargetSwitch = findViewById(R.id.btn_target_switch)
+        btnTargetSwitch.setOnClickListener {
+            val intent = Intent("CYCLE_INPUT_TARGET")
+            intent.setPackage(packageName) 
+            sendBroadcast(intent)
+        }
+        
+        btnResetCursor = findViewById(R.id.btn_reset_cursor)
+        btnResetCursor.setOnClickListener {
+            val currentTime = System.currentTimeMillis()
+            
+            // Check if we're within the tap timeout window
+            if (currentTime - lastResetCursorTapTime > TAP_TIMEOUT) {
+                resetCursorTapCount = 0
+            }
+            
+            resetCursorTapCount++
+            lastResetCursorTapTime = currentTime
+            
+            if (resetCursorTapCount >= 5) {
+                // Toggle debug mode on 5th tap
+                val intent = Intent("TOGGLE_DEBUG")
+                intent.setPackage(packageName)
+                sendBroadcast(intent)
+                Toast.makeText(this, "Debug Mode Toggled", Toast.LENGTH_SHORT).show()
+                resetCursorTapCount = 0
+            } else {
+                // Normal reset cursor behavior
+                val intent = Intent("RESET_CURSOR")
+                intent.setPackage(packageName)
+                sendBroadcast(intent)
+            }
+        }
+        
+        btnForceKeyboard = findViewById(R.id.btn_force_keyboard)
+        btnForceKeyboard.setOnClickListener {
+            val intent = Intent("TOGGLE_CUSTOM_KEYBOARD")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+            Toast.makeText(this, "Toggling Keyboard...", Toast.LENGTH_SHORT).show()
+        }
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             Shizuku.requestPermission(0)
@@ -2245,8 +4037,18 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Moving Trackpad to this screen...", Toast.LENGTH_SHORT).show()
             }
         }
+        
+        hideAppButton.setOnClickListener {
+            // Move app to background without closing
+            moveTaskToBack(true)
+        }
 
         settingsButton.setOnClickListener { 
+            // Show trackpad in preview mode when entering settings
+            val intent = Intent("SET_PREVIEW_MODE")
+            intent.setPackage(packageName)
+            intent.putExtra("PREVIEW_MODE", true)
+            sendBroadcast(intent)
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
@@ -2255,6 +4057,11 @@ class MainActivity : AppCompatActivity() {
         }
         
         btnManualAdjust.setOnClickListener {
+            // Show trackpad in preview mode when entering manual adjust
+            val intent = Intent("SET_PREVIEW_MODE")
+            intent.setPackage(packageName)
+            intent.putExtra("PREVIEW_MODE", true)
+            sendBroadcast(intent)
             startActivity(Intent(this, ManualAdjustActivity::class.java))
         }
 
@@ -2281,6 +4088,26 @@ class MainActivity : AppCompatActivity() {
         if (isAccessibilityEnabled()) {
             checkAndMoveDisplay()
         }
+        // Hide trackpad when main menu is visible
+        val intent = Intent("SET_TRACKPAD_VISIBILITY")
+        intent.setPackage(packageName)
+        intent.putExtra("VISIBLE", false)
+        sendBroadcast(intent)
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Show trackpad when leaving main menu
+        val intent = Intent("SET_TRACKPAD_VISIBILITY")
+        intent.setPackage(packageName)
+        intent.putExtra("VISIBLE", true)
+        sendBroadcast(intent)
+        
+        // Also disable preview mode
+        val previewIntent = Intent("SET_PREVIEW_MODE")
+        previewIntent.setPackage(packageName)
+        previewIntent.putExtra("PREVIEW_MODE", false)
+        sendBroadcast(previewIntent)
     }
 
     private fun checkAndMoveDisplay() {
@@ -2350,15 +4177,37 @@ class MainActivity : AppCompatActivity() {
     private fun showHelpDialog() {
         val text = TextView(this)
         text.setPadding(50, 40, 50, 40)
-        text.textSize = 16f
+        text.textSize = 14f
         text.text = """
-            == SETUP ==
-            1. Start Shizuku.
-            2. Enable Service.
+            == TRACKPAD CONTROLS ==
+            - Tap: Left Click
+            - Vol Up + Drag: Drag/Select
+            - Vol Down: Right Click (Back)
+            - Vol Down (Hold 1s): Move trackpad
             
-            == CONTROLS ==
-            • Use Manual Adjust for fine tuning.
-            • Click Center Button in Manual Adjust to reset.
+            == CORNER HANDLES ==
+            - Top-Left TAP: Toggle Keyboard
+            - Top-Left HOLD: Move trackpad
+            - Top-Right HOLD: Move window
+            - Bottom-Right HOLD: Resize window
+            - Bottom-Left TAP: Open Menu
+            
+            == CUSTOM KEYBOARD ==
+            - Full QWERTY layout
+            - SHIFT tap = Single uppercase
+            - SHIFT hold = Caps Lock (green)
+            - ?123 = Symbol layers
+            - Arrow/Tab/Esc keys at bottom
+            - Drag top bar to move
+            - Drag corner to resize
+            
+            == VIRTUAL DISPLAY ==
+            1. Create Virtual Display
+            2. Click 'Switch Local/Remote'
+            3. PINK Border = Remote control
+            
+            == SECRET ==
+            - Tap Reset Cursor 5x = Debug Mode
         """.trimIndent()
 
         AlertDialog.Builder(this)
@@ -2378,9 +4227,11 @@ import android.accessibilityservice.AccessibilityService
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.ServiceInfo
 import android.graphics.Color
@@ -2420,20 +4271,36 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var cursorLayout: FrameLayout? = null
     private var cursorView: ImageView? = null
     private lateinit var cursorParams: WindowManager.LayoutParams
+    
+    private var remoteWindowManager: WindowManager? = null
+    private var remoteCursorLayout: FrameLayout? = null
+    private var remoteCursorView: ImageView? = null
+    private lateinit var remoteCursorParams: WindowManager.LayoutParams
+    
     private var shellService: IShellService? = null
     private var isBound = false
     
+    private var keyboardOverlay: KeyboardOverlay? = null
+    private var isCustomKeyboardVisible = false
+    
+    private var isTrackpadVisible = true
+    private var isPreviewMode = false
+    
+    private var currentOverlayDisplayId = 0
+    
     private var currentDisplayId = -1 
+    private var inputTargetDisplayId = -1
     private var lastLoadedProfileKey = ""
 
-    // State Variables
+    private var uiScreenWidth = 1080
+    private var uiScreenHeight = 2640
+    private var targetScreenWidth = 1920
+    private var targetScreenHeight = 1080
+
     private var cursorX = 300f
     private var cursorY = 300f
     private var virtualScrollX = 0f
     private var virtualScrollY = 0f
-    private var screenWidth = 0
-    private var screenHeight = 0
-    private var screenDensity = 1.0f
     private var rotationAngle = 0 
     private var lastTouchX = 0f
     private var lastTouchY = 0f
@@ -2444,14 +4311,17 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var initialWindowHeight = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
-    private var currentAspectRatio = 1.33f
+    
     private var isTouchDragging = false
     private var isLeftKeyHeld = false
     private var isRightKeyHeld = false
     private var isRightDragPending = false 
     private var isVScrolling = false
     private var isHScrolling = false
-    private val scrollSensitivity = 3.0f 
+    private var dragDownTime: Long = 0L
+    
+    private var cursorSpeed = 2.5f
+    private var scrollSpeed = 3.0f 
     private var scrollZoneThickness = 60 
     private var prefVibrate = true
     private var prefReverseScroll = true
@@ -2463,11 +4333,9 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var prefHandleTouchSize = 60
     private var prefScrollTouchSize = 60
     private var prefScrollVisualSize = 4
-    private var cursorSpeed = 2.5f
-    private var scrollSpeed = 3.0f 
-    private var dragDownTime: Long = 0L
+    private var prefCursorSize = 50 
     
-    // KEYBOARD STATE
+    private var isDebugMode = false
     private var isKeyboardMode = false 
     private var savedWindowX = 0
     private var savedWindowY = 0
@@ -2476,6 +4344,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var highlightAlpha = false
     private var highlightHandles = false
     private var highlightScrolls = false
+    
     private val handleContainers = ArrayList<FrameLayout>()
     private val handleVisuals = ArrayList<View>()
     private var vScrollContainer: FrameLayout? = null
@@ -2492,482 +4361,449 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private val voiceRunnable = Runnable { toggleKeyboardMode() }
     
     private val clearHighlightsRunnable = Runnable {
-        highlightAlpha = false
-        highlightHandles = false
-        highlightScrolls = false
-        updateBorderColor(currentBorderColor)
-        updateLayoutSizes() 
+        highlightAlpha = false; highlightHandles = false; highlightScrolls = false
+        updateBorderColor(currentBorderColor); updateLayoutSizes() 
+    }
+    
+    private val switchReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "CYCLE_INPUT_TARGET" -> cycleInputTarget()
+                "RESET_CURSOR" -> resetCursorCenter()
+                "TOGGLE_DEBUG" -> toggleDebugMode()
+                "FORCE_KEYBOARD" -> toggleCustomKeyboard()
+                "TOGGLE_CUSTOM_KEYBOARD" -> toggleCustomKeyboard()
+                "SET_TRACKPAD_VISIBILITY" -> {
+                    val visible = intent.getBooleanExtra("VISIBLE", true)
+                    setTrackpadVisibility(visible)
+                }
+                "SET_PREVIEW_MODE" -> {
+                    val preview = intent.getBooleanExtra("PREVIEW_MODE", false)
+                    setPreviewMode(preview)
+                }
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
-    // --- GLOBAL KEY INTERCEPTION ---
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        val action = event.action
-        val keyCode = event.keyCode
-
+        if (isPreviewMode || !isTrackpadVisible) return super.onKeyEvent(event)
+        
+        val action = event.action; val keyCode = event.keyCode
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            if (action == KeyEvent.ACTION_DOWN) {
-                if (!isLeftKeyHeld) {
-                    isLeftKeyHeld = true
-                    startKeyDrag(MotionEvent.BUTTON_PRIMARY)
-                }
-            } else if (action == KeyEvent.ACTION_UP) {
-                isLeftKeyHeld = false
-                stopKeyDrag(MotionEvent.BUTTON_PRIMARY)
-            }
+            if (action == KeyEvent.ACTION_DOWN) { if (!isLeftKeyHeld) { isLeftKeyHeld = true; startKeyDrag(MotionEvent.BUTTON_PRIMARY) } } 
+            else if (action == KeyEvent.ACTION_UP) { isLeftKeyHeld = false; stopKeyDrag(MotionEvent.BUTTON_PRIMARY) }
             return true 
         }
-
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            if (action == KeyEvent.ACTION_DOWN) {
-                if (!isRightDragPending) {
-                    isRightDragPending = true
-                    handler.postDelayed(voiceRunnable, 1000)
-                }
-            } else if (action == KeyEvent.ACTION_UP) {
-                handler.removeCallbacks(voiceRunnable)
-                if (isRightDragPending) {
-                    performClick(true) 
-                    isRightDragPending = false
-                }
-            }
+            if (action == KeyEvent.ACTION_DOWN) { if (!isRightDragPending) { isRightDragPending = true; handler.postDelayed(voiceRunnable, 1000) } } 
+            else if (action == KeyEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if (isRightDragPending) { performClick(true); isRightDragPending = false } }
             return true 
         }
         return super.onKeyEvent(event)
     }
 
     private val userServiceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            shellService = IShellService.Stub.asInterface(binder)
-            isBound = true
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) { 
+            shellService = IShellService.Stub.asInterface(binder); isBound = true 
+            Thread { shellService?.runCommand("settings put secure show_ime_with_hard_keyboard 1") }.start()
+            initCustomKeyboard()
         }
-        override fun onServiceDisconnected(name: ComponentName?) {
-            shellService = null
-            isBound = false
-        }
+        override fun onServiceDisconnected(name: ComponentName?) { shellService = null; isBound = false }
     }
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            displayManager?.registerDisplayListener(this, handler)
-        } catch (e: Exception) {
-            Log.e("OverlayService", "Failed to init DisplayManager", e)
+        try { displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager; displayManager?.registerDisplayListener(this, handler) } catch (e: Exception) { Log.e("OverlayService", "Failed to init DisplayManager", e) }
+        val filter = IntentFilter().apply {
+            addAction("CYCLE_INPUT_TARGET"); addAction("RESET_CURSOR"); addAction("TOGGLE_DEBUG")
+            addAction("FORCE_KEYBOARD"); addAction("TOGGLE_CUSTOM_KEYBOARD")
+            addAction("SET_TRACKPAD_VISIBILITY"); addAction("SET_PREVIEW_MODE")
         }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(switchReceiver, filter, Context.RECEIVER_EXPORTED) else registerReceiver(switchReceiver, filter)
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        try {
-            createNotification() 
-            bindShizuku()
-            loadPrefs()
-            
-            if (displayManager == null) {
-                displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-                displayManager?.registerDisplayListener(this, handler)
-            }
-            
+        try { createNotification(); bindShizuku(); loadPrefs()
+            if (displayManager == null) { displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager; displayManager?.registerDisplayListener(this, handler) }
             setupWindows(Display.DEFAULT_DISPLAY) 
-        } catch (e: Exception) {
-            Log.e("OverlayService", "Crash in onServiceConnected", e)
-        }
+        } catch (e: Exception) { Log.e("OverlayService", "Crash in onServiceConnected", e) }
     }
 
     override fun onDisplayAdded(displayId: Int) {}
     override fun onDisplayRemoved(displayId: Int) {}
-    override fun onDisplayChanged(displayId: Int) {
-        if (displayId == currentDisplayId) {
-            updateScreenMetrics(displayId)
-            
-            val newKey = getProfileKey()
-            if (newKey != lastLoadedProfileKey) {
-                Log.d("OverlayService", "Aspect Ratio Changed: $lastLoadedProfileKey -> $newKey. Reloading.")
-                loadLayout() 
-            }
-        }
+    override fun onDisplayChanged(displayId: Int) { 
+        if (displayId == currentDisplayId) { updateUiMetrics(displayId); val newKey = getProfileKey(); if (newKey != lastLoadedProfileKey) loadLayout() }
     }
 
-    private fun updateScreenMetrics(displayId: Int) {
+    private fun updateUiMetrics(displayId: Int) {
         try {
             if (displayManager == null) displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
             val display = displayManager?.getDisplay(displayId) ?: return
-            
-            val metrics = android.util.DisplayMetrics()
-            display.getRealMetrics(metrics)
-            
-            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
-                screenWidth = metrics.widthPixels
-                screenHeight = metrics.heightPixels
-                screenDensity = metrics.density
-                cursorX = (screenWidth / 2f).coerceAtMost(screenWidth.toFloat())
-                cursorY = (screenHeight / 2f).coerceAtMost(screenHeight.toFloat())
+            val metrics = android.util.DisplayMetrics(); display.getRealMetrics(metrics)
+            if (metrics.widthPixels > 0) { 
+                uiScreenWidth = metrics.widthPixels; uiScreenHeight = metrics.heightPixels
+                if (inputTargetDisplayId == -1 || inputTargetDisplayId == displayId) { targetScreenWidth = uiScreenWidth; targetScreenHeight = uiScreenHeight }
+                keyboardOverlay?.setScreenDimensions(uiScreenWidth, uiScreenHeight, currentOverlayDisplayId)
             }
-        } catch (e: Exception) {
-            Log.e("OverlayService", "Metric Update Failed", e)
-        }
+        } catch (e: Exception) {}
+    }
+
+    private fun updateTargetMetrics(displayId: Int) {
+        try {
+            if (displayManager == null) displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val display = displayManager?.getDisplay(displayId)
+            if (display == null) { targetScreenWidth = 1920; targetScreenHeight = 1080; return }
+            val metrics = android.util.DisplayMetrics(); display.getRealMetrics(metrics)
+            if (metrics.widthPixels > 0) { targetScreenWidth = metrics.widthPixels; targetScreenHeight = metrics.heightPixels }
+            else { targetScreenWidth = 1920; targetScreenHeight = 1080 }
+        } catch (e: Exception) { targetScreenWidth = 1920; targetScreenHeight = 1080 }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            if (intent?.action != null) {
-                when (intent.action) {
-                    "RESET_POSITION" -> resetTrackpadPosition()
-                    "ROTATE" -> performRotation()
-                    "SAVE_LAYOUT" -> saveLayout()
-                    "LOAD_LAYOUT" -> loadLayout()
-                    "DELETE_PROFILE" -> deleteCurrentProfile()
-                    "MANUAL_ADJUST" -> handleManualAdjust(intent) // NEW
-                    "RELOAD_PREFS" -> {
-                        loadPrefs()
-                        updateBorderColor(currentBorderColor)
-                        updateLayoutSizes()
-                        updateScrollPosition()
-                    }
-                    "PREVIEW_UPDATE" -> handlePreview(intent)
-                }
+            when (intent?.action) {
+                "RESET_POSITION" -> resetTrackpadPosition()
+                "ROTATE" -> performRotation()
+                "SAVE_LAYOUT" -> saveLayout()
+                "LOAD_LAYOUT" -> loadLayout()
+                "DELETE_PROFILE" -> deleteCurrentProfile()
+                "MANUAL_ADJUST" -> handleManualAdjust(intent)
+                "RELOAD_PREFS" -> { loadPrefs(); updateBorderColor(currentBorderColor); updateLayoutSizes(); updateScrollPosition(); updateCursorSize() }
+                "PREVIEW_UPDATE" -> handlePreview(intent)
+                "CYCLE_INPUT_TARGET" -> cycleInputTarget()
+                "RESET_CURSOR" -> resetCursorCenter()
+                "TOGGLE_DEBUG" -> toggleDebugMode()
+                "FORCE_KEYBOARD" -> toggleCustomKeyboard()
+                "TOGGLE_CUSTOM_KEYBOARD" -> toggleCustomKeyboard()
             }
-            
             if (intent?.hasExtra("DISPLAY_ID") == true) {
                 val targetDisplayId = intent.getIntExtra("DISPLAY_ID", Display.DEFAULT_DISPLAY)
-                if (targetDisplayId != currentDisplayId || trackpadLayout == null) {
-                    removeOverlays()
-                    setupWindows(targetDisplayId)
-                }
+                if (targetDisplayId != currentDisplayId || trackpadLayout == null) { removeOverlays(); setupWindows(targetDisplayId) }
             }
-        } catch (e: Exception) {
-            Log.e("OverlayService", "Crash in onStartCommand", e)
-        }
+        } catch (e: Exception) { Log.e("OverlayService", "Crash in onStartCommand", e) }
         return START_STICKY
     }
     
-    private fun handleManualAdjust(intent: Intent) {
-        if (windowManager == null || trackpadLayout == null) return
+    private fun setTrackpadVisibility(visible: Boolean) {
+        isTrackpadVisible = visible
         
-        // Read deltas
-        val dx = intent.getIntExtra("DX", 0)
-        val dy = intent.getIntExtra("DY", 0)
-        val dw = intent.getIntExtra("DW", 0)
-        val dh = intent.getIntExtra("DH", 0)
+        if (!visible) {
+            resetAllTouchStates()
+        }
         
-        // Apply
-        trackpadParams.x += dx
-        trackpadParams.y += dy
-        trackpadParams.width = max(200, trackpadParams.width + dw)
-        trackpadParams.height = max(200, trackpadParams.height + dh)
+        trackpadLayout?.visibility = if (visible) View.VISIBLE else View.GONE
+        cursorLayout?.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    private fun setPreviewMode(preview: Boolean) {
+        isPreviewMode = preview
         
-        try {
-            windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
-            saveLayout() // Auto-save on manual adjust so it sticks
-        } catch (e: Exception) {}
+        if (preview) {
+            resetAllTouchStates()
+            trackpadLayout?.visibility = View.VISIBLE
+            cursorLayout?.visibility = View.VISIBLE
+            trackpadParams.flags = trackpadParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            try {
+                windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
+            } catch (e: Exception) {}
+            trackpadLayout?.alpha = 0.7f
+        } else {
+            trackpadParams.flags = trackpadParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            try {
+                windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
+            } catch (e: Exception) {}
+            trackpadLayout?.alpha = 1.0f
+        }
     }
     
-    private fun removeOverlays() {
-        try {
-            if (trackpadLayout != null) {
-                windowManager?.removeView(trackpadLayout)
-                trackpadLayout = null
-            }
-            if (cursorLayout != null) {
-                windowManager?.removeView(cursorLayout)
-                cursorLayout = null
-            }
-        } catch (e: Exception) {}
+    private fun resetAllTouchStates() {
+        handler.removeCallbacks(longPressRunnable)
+        handler.removeCallbacks(resizeLongPressRunnable)
+        handler.removeCallbacks(moveLongPressRunnable)
+        handler.removeCallbacks(voiceRunnable)
+        
+        if (isTouchDragging) {
+            isTouchDragging = false
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
+        }
+        
+        if (isLeftKeyHeld) {
+            isLeftKeyHeld = false
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
+        }
+        
+        if (isRightKeyHeld) {
+            isRightKeyHeld = false
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
+        }
+        
+        if (isVScrolling || isHScrolling) {
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+            isVScrolling = false
+            isHScrolling = false
+        }
+        
+        isRightDragPending = false
+        isMoving = false
+        isResizing = false
+        
+        if (!isDebugMode) {
+            if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
+            else updateBorderColor(0x55FFFFFF.toInt())
+        }
+    }
+    
+    private fun initCustomKeyboard() {
+        if (windowManager == null || shellService == null) return
+        keyboardOverlay = KeyboardOverlay(this, windowManager!!, shellService, inputTargetDisplayId)
+        keyboardOverlay?.setScreenDimensions(uiScreenWidth, uiScreenHeight, currentOverlayDisplayId)
+    }
+    
+    private fun toggleCustomKeyboard() {
+        if (keyboardOverlay == null && shellService != null) initCustomKeyboard()
+        
+        if (keyboardOverlay != null) {
+            val wasVisible = keyboardOverlay?.isShowing() == true
+            if (wasVisible) keyboardOverlay?.hide()
+            keyboardOverlay = KeyboardOverlay(this, windowManager!!, shellService, inputTargetDisplayId)
+            keyboardOverlay?.setScreenDimensions(uiScreenWidth, uiScreenHeight, currentOverlayDisplayId)
+            if (!wasVisible) keyboardOverlay?.show()
+        } else {
+            keyboardOverlay?.toggle()
+        }
+        
+        isCustomKeyboardVisible = keyboardOverlay?.isShowing() ?: false
+        if (isCustomKeyboardVisible) { updateBorderColor(0xFF9C27B0.toInt()) }
+        else { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }
+        vibrate()
+    }
+
+    private fun toggleDebugMode() { isDebugMode = !isDebugMode; if (isDebugMode) { showToast("Debug ON"); updateBorderColor(0xFFFFFF00.toInt()) } else { showToast("Debug OFF"); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } }
+    private fun resetCursorCenter() { cursorX = (targetScreenWidth / 2).toFloat(); cursorY = (targetScreenHeight / 2).toFloat(); injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis()); if (inputTargetDisplayId == currentDisplayId) { cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch(e: Exception) {} } else { remoteCursorParams.x = cursorX.toInt(); remoteCursorParams.y = cursorY.toInt(); try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} }; showToast("Reset to ${cursorX.toInt()}x${cursorY.toInt()}"); vibrate() }
+    private fun handleManualAdjust(intent: Intent) { if (windowManager == null || trackpadLayout == null) return; val dx = intent.getIntExtra("DX", 0); val dy = intent.getIntExtra("DY", 0); val dw = intent.getIntExtra("DW", 0); val dh = intent.getIntExtra("DH", 0); trackpadParams.x += dx; trackpadParams.y += dy; trackpadParams.width = max(200, trackpadParams.width + dw); trackpadParams.height = max(200, trackpadParams.height + dh); try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); saveLayout() } catch (e: Exception) {} }
+    
+    private fun removeOverlays() { 
+        try { 
+            keyboardOverlay?.hide()
+            if (trackpadLayout != null) { windowManager?.removeView(trackpadLayout); trackpadLayout = null }
+            if (cursorLayout != null) { windowManager?.removeView(cursorLayout); cursorLayout = null }
+            removeRemoteCursor()
+        } catch (e: Exception) {} 
     }
 
     private fun setupWindows(displayId: Int) {
         if (trackpadLayout != null && displayId == currentDisplayId) return
-
         try {
-            updateScreenMetrics(displayId)
-            if (screenWidth == 0) updateScreenMetrics(displayId)
-
+            updateUiMetrics(displayId); if (uiScreenWidth == 0) updateUiMetrics(displayId)
             val displayContext = createDisplayContext(displayManager!!.getDisplay(displayId))
             windowManager = displayContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            currentDisplayId = displayId
+            currentDisplayId = displayId; inputTargetDisplayId = displayId
+            currentOverlayDisplayId = displayId
+            targetScreenWidth = uiScreenWidth; targetScreenHeight = uiScreenHeight
             
-            // 1. CURSOR
             cursorLayout = FrameLayout(displayContext)
-            cursorView = ImageView(displayContext)
-            cursorView?.setImageResource(R.drawable.ic_cursor)
-            cursorLayout?.addView(cursorView, FrameLayout.LayoutParams(50, 50))
-            
-            cursorParams = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, 
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                cursorParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
-            cursorParams.gravity = Gravity.TOP or Gravity.LEFT
-            cursorParams.x = cursorX.toInt()
-            cursorParams.y = cursorY.toInt()
+            cursorView = ImageView(displayContext); cursorView?.setImageResource(R.drawable.ic_cursor)
+            val size = if (prefCursorSize > 0) prefCursorSize else 50
+            cursorLayout?.addView(cursorView, FrameLayout.LayoutParams(size, size))
+            cursorParams = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) { cursorParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES }
+            cursorParams.gravity = Gravity.TOP or Gravity.LEFT; cursorX = uiScreenWidth / 2f; cursorY = uiScreenHeight / 2f; cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt()
             windowManager?.addView(cursorLayout, cursorParams)
 
-            // 2. TRACKPAD
-            trackpadLayout = object : FrameLayout(displayContext) {}
-            
-            val bg = GradientDrawable()
-            bg.cornerRadius = 30f
-            trackpadLayout?.background = bg
-            updateBorderColor(0x55FFFFFF.toInt())
-            trackpadLayout?.isFocusable = true
-            trackpadLayout?.isFocusableInTouchMode = true
-
-            handleContainers.clear()
-            handleVisuals.clear()
-            val handleColor = 0x15FFFFFF.toInt()
-            addHandle(displayContext, Gravity.TOP or Gravity.RIGHT, handleColor) { v, e -> moveWindow(e) }
-            addHandle(displayContext, Gravity.BOTTOM or Gravity.RIGHT, handleColor) { v, e -> resizeWindow(e) }
-            addHandle(displayContext, Gravity.BOTTOM or Gravity.LEFT, handleColor) { v, e -> openMenuHandle(e) }
-            addHandle(displayContext, Gravity.TOP or Gravity.LEFT, handleColor) { v, e -> voiceWindow(e) }
+            trackpadLayout = object : FrameLayout(displayContext) {}; val bg = GradientDrawable(); bg.cornerRadius = 30f; trackpadLayout?.background = bg; updateBorderColor(0x55FFFFFF.toInt()); trackpadLayout?.isFocusable = true; trackpadLayout?.isFocusableInTouchMode = true
+            handleContainers.clear(); handleVisuals.clear(); val handleColor = 0x15FFFFFF.toInt()
+            addHandle(displayContext, Gravity.TOP or Gravity.RIGHT, handleColor) { _, e -> moveWindow(e) }
+            addHandle(displayContext, Gravity.BOTTOM or Gravity.RIGHT, handleColor) { _, e -> resizeWindow(e) }
+            addHandle(displayContext, Gravity.BOTTOM or Gravity.LEFT, handleColor) { _, e -> openMenuHandle(e) }
+            addHandle(displayContext, Gravity.TOP or Gravity.LEFT, handleColor) { _, e -> keyboardHandle(e) }
             addScrollBars(displayContext)
 
-            trackpadParams = WindowManager.LayoutParams(
-                400, 300,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            )
-            trackpadParams.gravity = Gravity.TOP or Gravity.LEFT
-            trackpadParams.title = "TrackpadInput"
+            trackpadParams = WindowManager.LayoutParams(400, 300, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT)
+            trackpadParams.gravity = Gravity.TOP or Gravity.LEFT; trackpadParams.title = "TrackpadInput"
             
-            resetTrackpadPosition()
+            loadOverlayPositionForDisplay(displayId)
             
-            val gestureDetector = GestureDetector(displayContext, object : GestureDetector.SimpleOnGestureListener() {
-                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    if (!isTouchDragging && !isLeftKeyHeld && !isRightKeyHeld && !isVScrolling && !isHScrolling) performClick(false)
-                    return true
+            val gestureDetector = GestureDetector(displayContext, object : GestureDetector.SimpleOnGestureListener() { override fun onSingleTapConfirmed(e: MotionEvent): Boolean { if (!isTouchDragging && !isLeftKeyHeld && !isRightKeyHeld && !isVScrolling && !isHScrolling && !isPreviewMode && isTrackpadVisible) performClick(false); return true } })
+            trackpadLayout?.setOnTouchListener { _, event -> 
+                if (!isPreviewMode && isTrackpadVisible) {
+                    gestureDetector.onTouchEvent(event)
+                    handleTrackpadTouch(event)
                 }
-            })
-
-            trackpadLayout?.setOnTouchListener { _, event ->
-                gestureDetector.onTouchEvent(event)
-                handleTrackpadTouch(event)
-                true
+                true 
             }
+            windowManager?.addView(trackpadLayout, trackpadParams); loadLayout()
             
-            windowManager?.addView(trackpadLayout, trackpadParams)
-            loadLayout()
-            
-        } catch (e: Exception) {
-            Log.e("OverlayService", "Setup Windows Crash", e)
-        }
+            if (shellService != null) initCustomKeyboard()
+        } catch (e: Exception) { Log.e("OverlayService", "Setup Windows Crash", e) }
     }
-
-    // --- PROFILE MANAGEMENT ---
     
-    private fun getProfileKey(): String {
-        if (screenHeight == 0) return "profile_1.0"
-        val ratio = screenWidth.toFloat() / screenHeight.toFloat()
-        return "profile_" + String.format("%.1f", ratio)
-    }
-
-    private fun saveLayout() { 
-        if (trackpadLayout == null || screenWidth == 0 || screenHeight == 0) return
-        val key = getProfileKey()
-        lastLoadedProfileKey = key 
-
-        val xPct = trackpadParams.x.toFloat() / screenWidth.toFloat()
-        val yPct = trackpadParams.y.toFloat() / screenHeight.toFloat()
-        val wPct = trackpadParams.width.toFloat() / screenWidth.toFloat()
-        val hPct = trackpadParams.height.toFloat() / screenHeight.toFloat()
-
-        val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
-        p.edit()
-            .putFloat("${key}_xp", xPct)
-            .putFloat("${key}_yp", yPct)
-            .putFloat("${key}_wp", wPct)
-            .putFloat("${key}_hp", hPct)
-            .putBoolean("${key}_saved", true)
-            .apply()
-        vibrate() 
-    }
-
-    private fun loadLayout() { 
-        if (trackpadLayout == null || windowManager == null) return
-        val key = getProfileKey()
-        lastLoadedProfileKey = key
+    private fun loadOverlayPositionForDisplay(displayId: Int) {
+        currentOverlayDisplayId = displayId
+        val prefs = getSharedPreferences("TrackpadPrefs", MODE_PRIVATE)
         
-        val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
+        val defaultX = (uiScreenWidth - 400) / 2
+        val defaultY = (uiScreenHeight - 300) / 2
         
-        if (p.getBoolean("${key}_saved", false)) {
-            val xPct = p.getFloat("${key}_xp", 0.1f)
-            val yPct = p.getFloat("${key}_yp", 0.1f)
-            val wPct = p.getFloat("${key}_wp", 0.5f)
-            val hPct = p.getFloat("${key}_hp", 0.4f)
-            
-            val calcW = (wPct * screenWidth).toInt()
-            val calcH = (hPct * screenHeight).toInt()
-            
-            trackpadParams.width = calcW.coerceAtLeast(300)
-            trackpadParams.height = calcH.coerceAtLeast(300)
-            
-            trackpadParams.x = (xPct * screenWidth).toInt()
-            trackpadParams.y = (yPct * screenHeight).toInt()
-
+        if (prefs.contains("overlay_x_d$displayId")) {
+            trackpadParams.x = prefs.getInt("overlay_x_d$displayId", defaultX)
+            trackpadParams.y = prefs.getInt("overlay_y_d$displayId", defaultY)
+            trackpadParams.width = prefs.getInt("overlay_width_d$displayId", 400)
+            trackpadParams.height = prefs.getInt("overlay_height_d$displayId", 300)
         } else {
-            // Default Fallback
+            trackpadParams.x = defaultX
+            trackpadParams.y = defaultY
             trackpadParams.width = 400
             trackpadParams.height = 300
-            trackpadParams.x = (screenWidth / 2) - 200
-            trackpadParams.y = (screenHeight / 2) - 150
         }
-        
-        try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); } catch (e: Exception) {} 
     }
     
-    private fun deleteCurrentProfile() {
-        val key = getProfileKey()
-        getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit()
-            .remove("${key}_saved")
-            .remove("${key}_xp")
-            .remove("${key}_yp")
-            .remove("${key}_wp")
-            .remove("${key}_hp")
+    private fun saveOverlayPosition() {
+        val prefs = getSharedPreferences("TrackpadPrefs", MODE_PRIVATE)
+        prefs.edit()
+            .putInt("overlay_x_d$currentOverlayDisplayId", trackpadParams.x)
+            .putInt("overlay_y_d$currentOverlayDisplayId", trackpadParams.y)
             .apply()
-        resetTrackpadPosition()
     }
-
-    private fun resetTrackpadPosition() { 
-        if (windowManager == null || trackpadLayout == null) return
-        
-        trackpadParams.width = 400
-        trackpadParams.height = 300
-        
-        val centerX = (screenWidth / 2) - 200
-        val centerY = (screenHeight / 2) - 150
-        
-        trackpadParams.x = if (centerX > 0) centerX else 100
-        trackpadParams.y = if (centerY > 0) centerY else 100
-        
-        try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); vibrate() } catch (e: Exception) {} 
+    
+    private fun saveOverlaySize() {
+        val prefs = getSharedPreferences("TrackpadPrefs", MODE_PRIVATE)
+        prefs.edit()
+            .putInt("overlay_width_d$currentOverlayDisplayId", trackpadParams.width)
+            .putInt("overlay_height_d$currentOverlayDisplayId", trackpadParams.height)
+            .apply()
     }
-
-    // --- INTERACTION LOGIC ---
-
+    
+    private fun createRemoteCursor(displayId: Int) { try { removeRemoteCursor(); val display = displayManager?.getDisplay(displayId) ?: return; val remoteContext = createDisplayContext(display); remoteWindowManager = remoteContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager; remoteCursorLayout = FrameLayout(remoteContext); remoteCursorView = ImageView(remoteContext); remoteCursorView?.setImageResource(R.drawable.ic_cursor); val size = if (prefCursorSize > 0) prefCursorSize else 50; remoteCursorLayout?.addView(remoteCursorView, FrameLayout.LayoutParams(size, size)); remoteCursorParams = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT); remoteCursorParams.gravity = Gravity.TOP or Gravity.LEFT; val metrics = android.util.DisplayMetrics(); display.getRealMetrics(metrics); remoteCursorParams.x = metrics.widthPixels / 2; remoteCursorParams.y = metrics.heightPixels / 2; remoteWindowManager?.addView(remoteCursorLayout, remoteCursorParams) } catch (e: Exception) { Log.e("OverlayService", "Failed to create remote cursor", e); showToast("Failed to draw on Display $displayId") } }
+    private fun removeRemoteCursor() { try { if (remoteCursorLayout != null && remoteWindowManager != null) { remoteWindowManager?.removeView(remoteCursorLayout) } } catch(e: Exception) {} ; remoteCursorLayout = null; remoteCursorView = null; remoteWindowManager = null }
+    private fun updateCursorSize() { val size = if (prefCursorSize > 0) prefCursorSize else 50; if (cursorView != null) { val lp = cursorView!!.layoutParams; lp.width = size; lp.height = size; cursorView!!.layoutParams = lp }; if (remoteCursorView != null) { val lp = remoteCursorView!!.layoutParams; lp.width = size; lp.height = size; remoteCursorView!!.layoutParams = lp } }
+    private fun getProfileKey(): String { if (uiScreenHeight == 0) return "profile_1.0"; val ratio = uiScreenWidth.toFloat() / uiScreenHeight.toFloat(); return "profile_" + String.format("%.1f", ratio) }
+    private fun saveLayout() { if (trackpadLayout == null || uiScreenWidth == 0 || uiScreenHeight == 0) return; val key = getProfileKey(); lastLoadedProfileKey = key; val xPct = trackpadParams.x.toFloat() / uiScreenWidth.toFloat(); val yPct = trackpadParams.y.toFloat() / uiScreenHeight.toFloat(); val wPct = trackpadParams.width.toFloat() / uiScreenWidth.toFloat(); val hPct = trackpadParams.height.toFloat() / uiScreenHeight.toFloat(); val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE); p.edit().putFloat("${key}_xp", xPct).putFloat("${key}_yp", yPct).putFloat("${key}_wp", wPct).putFloat("${key}_hp", hPct).putBoolean("${key}_saved", true).apply(); saveOverlayPosition(); saveOverlaySize(); vibrate() }
+    private fun loadLayout() { if (trackpadLayout == null || windowManager == null) return; val key = getProfileKey(); lastLoadedProfileKey = key; val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE); if (p.getBoolean("${key}_saved", false)) { val xPct = p.getFloat("${key}_xp", 0.1f); val yPct = p.getFloat("${key}_yp", 0.1f); val wPct = p.getFloat("${key}_wp", 0.5f); val hPct = p.getFloat("${key}_hp", 0.4f); val calcW = (wPct * uiScreenWidth).toInt(); val calcH = (hPct * uiScreenHeight).toInt(); trackpadParams.width = calcW.coerceAtLeast(300); trackpadParams.height = calcH.coerceAtLeast(300); trackpadParams.x = (xPct * uiScreenWidth).toInt(); trackpadParams.y = (yPct * uiScreenHeight).toInt() } else { trackpadParams.width = 400; trackpadParams.height = 300; trackpadParams.x = (uiScreenWidth / 2) - 200; trackpadParams.y = (uiScreenHeight / 2) - 150 }; try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); } catch (e: Exception) {} }
+    private fun deleteCurrentProfile() { val key = getProfileKey(); getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE).edit().remove("${key}_saved").remove("${key}_xp").remove("${key}_yp").remove("${key}_wp").remove("${key}_hp").apply(); resetTrackpadPosition() }
+    private fun resetTrackpadPosition() { if (windowManager == null || trackpadLayout == null) return; trackpadParams.width = 400; trackpadParams.height = 300; val centerX = (uiScreenWidth / 2) - 200; val centerY = (uiScreenHeight / 2) - 150; trackpadParams.x = if (centerX > 0) centerX else 100; trackpadParams.y = if (centerY > 0) centerY else 100; try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams); vibrate() } catch (e: Exception) {} }
     private fun moveWindow(event: MotionEvent): Boolean { if (prefLocked) return true; when (event.action) { MotionEvent.ACTION_DOWN -> { handler.postDelayed(moveLongPressRunnable, 1000); initialWindowX = trackpadParams.x; initialWindowY = trackpadParams.y; initialTouchX = event.rawX; initialTouchY = event.rawY; return true }; MotionEvent.ACTION_MOVE -> { if (isMoving) { trackpadParams.x = initialWindowX + (event.rawX - initialTouchX).toInt(); trackpadParams.y = initialWindowY + (event.rawY - initialTouchY).toInt(); windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } else if (abs(event.rawX - initialTouchX) > 20) handler.removeCallbacks(moveLongPressRunnable); return true }; MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(moveLongPressRunnable); if (isMoving) stopMove(); return true } }; return false }
     private fun startMove() { isMoving = true; vibrate(); updateBorderColor(0xFF0000FF.toInt()) }
-    private fun stopMove() { isMoving = false; updateBorderColor(0x55FFFFFF.toInt()) }
-    
-    private fun resizeWindow(event: MotionEvent): Boolean { 
-        if (prefLocked) return true
-        when (event.action) { 
-            MotionEvent.ACTION_DOWN -> { 
-                handler.postDelayed(resizeLongPressRunnable, 1000)
-                initialWindowWidth = trackpadParams.width
-                initialWindowHeight = trackpadParams.height
-                initialTouchX = event.rawX; initialTouchY = event.rawY
-                return true 
-            }
-            MotionEvent.ACTION_MOVE -> { 
-                if (isResizing) { 
-                    val deltaX = event.rawX - initialTouchX
-                    val deltaY = event.rawY - initialTouchY
-                    val newWidth = (initialWindowWidth + deltaX).toInt()
-                    val newHeight = (initialWindowHeight + deltaY).toInt()
-                    trackpadParams.width = max(300, newWidth)
-                    trackpadParams.height = max(300, newHeight)
-                    windowManager?.updateViewLayout(trackpadLayout, trackpadParams) 
-                } else if (abs(event.rawX - initialTouchX) > 20) handler.removeCallbacks(resizeLongPressRunnable)
-                return true 
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { 
-                handler.removeCallbacks(resizeLongPressRunnable); if (isResizing) stopResize(); return true 
-            } 
-        }
-        return false 
-    }
-    
+    private fun stopMove() { isMoving = false; saveOverlayPosition(); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }
+    private fun resizeWindow(event: MotionEvent): Boolean { if (prefLocked) return true; when (event.action) { MotionEvent.ACTION_DOWN -> { handler.postDelayed(resizeLongPressRunnable, 1000); initialWindowWidth = trackpadParams.width; initialWindowHeight = trackpadParams.height; initialTouchX = event.rawX; initialTouchY = event.rawY; return true }; MotionEvent.ACTION_MOVE -> { if (isResizing) { val deltaX = event.rawX - initialTouchX; val deltaY = event.rawY - initialTouchY; val newWidth = (initialWindowWidth + deltaX).toInt(); val newHeight = (initialWindowHeight + deltaY).toInt(); trackpadParams.width = max(300, newWidth); trackpadParams.height = max(300, newHeight); windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } else if (abs(event.rawX - initialTouchX) > 20) handler.removeCallbacks(resizeLongPressRunnable); return true }; MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(resizeLongPressRunnable); if (isResizing) stopResize(); return true } }; return false }
     private fun startResize() { isResizing = true; vibrate(); updateBorderColor(0xFF0000FF.toInt()) }
-    private fun stopResize() { isResizing = false; updateBorderColor(0x55FFFFFF.toInt()) }
+    private fun stopResize() { isResizing = false; saveOverlaySize(); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }
     
     private fun handleTrackpadTouch(event: MotionEvent) {
-        val viewWidth = trackpadLayout?.width ?: 0
-        val viewHeight = trackpadLayout?.height ?: 0
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
+        if (isPreviewMode || !isTrackpadVisible) {
+            if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
+                resetAllTouchStates()
+            }
+            return
+        }
+        
+        val viewWidth = trackpadLayout?.width ?: 0; val viewHeight = trackpadLayout?.height ?: 0
+        when (event.action) { 
+            MotionEvent.ACTION_DOWN -> { 
                 lastTouchX = event.x; lastTouchY = event.y
                 val inVZone = if (prefVPosLeft) event.x < scrollZoneThickness else event.x > (viewWidth - scrollZoneThickness)
                 val inHZone = if (prefHPosTop) event.y < scrollZoneThickness else event.y > (viewHeight - scrollZoneThickness)
-                if (inVZone) { isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
-                else if (inHZone) { isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
-                else handler.postDelayed(longPressRunnable, 400)
+                if (inVZone) { isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } 
+                else if (inHZone) { isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } 
+                else handler.postDelayed(longPressRunnable, 400) 
             }
-            MotionEvent.ACTION_MOVE -> {
-                val rawDx = (event.x - lastTouchX) * cursorSpeed
-                val rawDy = (event.y - lastTouchY) * cursorSpeed
-                if (isVScrolling) {
-                    val dist = (event.y - lastTouchY) * scrollSpeed
-                    if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
-                } else if (isHScrolling) {
-                    val dist = (event.x - lastTouchX) * scrollSpeed
-                    if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) }
-                } else {
+            MotionEvent.ACTION_MOVE -> { 
+                val rawDx = (event.x - lastTouchX) * cursorSpeed; val rawDy = (event.y - lastTouchY) * cursorSpeed
+                if (isVScrolling) { val dist = (event.y - lastTouchY) * scrollSpeed; if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } } 
+                else if (isHScrolling) { val dist = (event.x - lastTouchX) * scrollSpeed; if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } } 
+                else { 
                     var finalDx = rawDx; var finalDy = rawDy
                     when (rotationAngle) { 90 -> { finalDx = -rawDy; finalDy = rawDx }; 180 -> { finalDx = -rawDx; finalDy = -rawDy }; 270 -> { finalDx = rawDy; finalDy = -rawDx } }
                     if (!isTouchDragging && (abs(rawDx) > 5 || abs(rawDy) > 5)) { handler.removeCallbacks(longPressRunnable); if (isRightDragPending) { isRightDragPending = false; handler.removeCallbacks(voiceRunnable); isRightKeyHeld = true; startKeyDrag(MotionEvent.BUTTON_SECONDARY) } }
-                    moveCursor(finalDx, finalDy)
+                    val safeW = if (inputTargetDisplayId != currentDisplayId) targetScreenWidth.toFloat() else uiScreenWidth.toFloat()
+                    val safeH = if (inputTargetDisplayId != currentDisplayId) targetScreenHeight.toFloat() else uiScreenHeight.toFloat()
+                    cursorX = (cursorX + finalDx).coerceIn(0f, safeW); cursorY = (cursorY + finalDy).coerceIn(0f, safeH)
+                    if (inputTargetDisplayId == currentDisplayId) { cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch(e: Exception) {} } 
+                    else { remoteCursorParams.x = cursorX.toInt(); remoteCursorParams.y = cursorY.toInt(); try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} }
                     if (isTouchDragging) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
                     else if (isLeftKeyHeld) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
                     else if (isRightKeyHeld) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
+                    else injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis())
                 }
-                lastTouchX = event.x; lastTouchY = event.y
+                lastTouchX = event.x; lastTouchY = event.y 
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(longPressRunnable); if (isTouchDragging) stopTouchDrag(); if (isVScrolling || isHScrolling) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY); isVScrolling = false; isHScrolling = false; updateBorderColor(0x55FFFFFF.toInt()) } }
-        }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { 
+                handler.removeCallbacks(longPressRunnable); if (isTouchDragging) stopTouchDrag()
+                if (isVScrolling || isHScrolling) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY); isVScrolling = false; isHScrolling = false }
+                if (isDebugMode) { showToast("Disp:$inputTargetDisplayId | X:${cursorX.toInt()} Y:${cursorY.toInt()}"); updateBorderColor(0xFFFFFF00.toInt()) } 
+                else { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } 
+            } 
+        } 
     }
+    
     private fun performRotation() { rotationAngle = (rotationAngle + 90) % 360; cursorView?.rotation = rotationAngle.toFloat(); vibrate(); updateBorderColor(0xFFFFFF00.toInt()); }
-    private fun moveCursor(dx: Float, dy: Float) { cursorX = (cursorX + dx).coerceIn(0f, screenWidth.toFloat()); cursorY = (cursorY + dy).coerceIn(0f, screenHeight.toFloat()); cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch (e: Exception) {} }
     private fun startKeyDrag(b: Int) { vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
-    private fun stopKeyDrag(b: Int) { updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
+    private fun stopKeyDrag(b: Int) { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
     private fun startTouchDrag() { isTouchDragging = true; vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime) }
-    private fun stopTouchDrag() { isTouchDragging = false; updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime) }
-    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { if (shellService == null) return; val dId = cursorLayout?.display?.displayId ?: Display.DEFAULT_DISPLAY; Thread { try { shellService?.injectMouse(a, x, y, dId, s, b, t) } catch (e: Exception) {} }.start() }
-    private fun injectScroll(v: Float, h: Float) { if (shellService == null) return; val dId = cursorLayout?.display?.displayId ?: Display.DEFAULT_DISPLAY; Thread { try { shellService?.injectScroll(cursorX, cursorY, v, h, dId) } catch (e: Exception) {} }.start() }
-    private fun performClick(r: Boolean) { if (shellService == null) { bindShizuku(); return }; val dId = cursorLayout?.display?.displayId ?: Display.DEFAULT_DISPLAY; Thread { try { if (r) shellService?.execRightClick(cursorX, cursorY, dId) else shellService?.execClick(cursorX, cursorY, dId) } catch (e: Exception) {} }.start() }
+    private fun stopTouchDrag() { isTouchDragging = false; if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime) }
+    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { if (shellService == null) return; Thread { try { shellService?.injectMouse(a, x, y, inputTargetDisplayId, s, b, t) } catch (e: Exception) {} }.start() }
+    private fun performClick(r: Boolean) { if (shellService == null) { bindShizuku(); return }; Thread { try { if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) } catch (e: Exception) {} }.start() }
+    
+    private fun cycleInputTarget() { 
+        if (displayManager == null) return
+        try { 
+            val displays = displayManager!!.displays; var nextId = -1
+            for (d in displays) { if (d.displayId != currentDisplayId) { if (inputTargetDisplayId == currentDisplayId) { nextId = d.displayId; break } else if (inputTargetDisplayId == d.displayId) { continue } else { nextId = d.displayId } } }
+            if (nextId == -1) { 
+                inputTargetDisplayId = currentDisplayId; targetScreenWidth = uiScreenWidth; targetScreenHeight = uiScreenHeight
+                removeRemoteCursor(); cursorX = (uiScreenWidth / 2).toFloat(); cursorY = (uiScreenHeight / 2).toFloat()
+                cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); windowManager?.updateViewLayout(cursorLayout, cursorParams)
+                currentBorderColor = 0x55FFFFFF.toInt(); updateBorderColor(currentBorderColor); cursorView?.visibility = View.VISIBLE
+                showToast("Target: Local (Display $currentDisplayId)"); vibrate()
+            } else { 
+                inputTargetDisplayId = nextId; updateTargetMetrics(nextId); createRemoteCursor(nextId)
+                cursorX = (targetScreenWidth / 2).toFloat(); cursorY = (targetScreenHeight / 2).toFloat()
+                currentBorderColor = 0xFFFF00FF.toInt(); updateBorderColor(currentBorderColor); cursorView?.visibility = View.GONE
+                showToast("Target: Display $nextId (${targetScreenWidth}x${targetScreenHeight})"); vibrate(); vibrate()
+            }
+            if (isCustomKeyboardVisible) { keyboardOverlay?.hide(); keyboardOverlay = KeyboardOverlay(this, windowManager!!, shellService, inputTargetDisplayId); keyboardOverlay?.setScreenDimensions(uiScreenWidth, uiScreenHeight, currentOverlayDisplayId); keyboardOverlay?.show() }
+        } catch (e: Exception) { Log.e("OverlayService", "Cycle Error", e) } 
+    }
+    
+    private fun showToast(msg: String) { handler.post { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show() } }
     private fun vibrate() { if (!prefVibrate) return; val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator; if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(50) }
     private fun bindShizuku() { try { val c = ComponentName(packageName, ShellUserService::class.java.name); ShizukuBinder.bind(c, userServiceConnection, BuildConfig.DEBUG, BuildConfig.VERSION_CODE) } catch (e: Exception) {} }
     private fun createNotification() { val c = NotificationChannel("overlay_service", "Trackpad Active", NotificationManager.IMPORTANCE_LOW); (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(c); val n = Notification.Builder(this, "overlay_service").setContentTitle("Trackpad Active").setSmallIcon(R.mipmap.ic_launcher).build(); if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(1, n) }
-    override fun onDestroy() { super.onDestroy(); displayManager?.unregisterDisplayListener(this); if (trackpadLayout != null) windowManager?.removeView(trackpadLayout); if (cursorLayout != null) windowManager?.removeView(cursorLayout); if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) }
     
-    // --- Helpers for UI ---
-    private fun toggleKeyboardMode() {
-        vibrate()
-        isRightDragPending = false
-        if (!isKeyboardMode) {
-            isKeyboardMode = true
-            savedWindowX = trackpadParams.x
-            savedWindowY = trackpadParams.y
-            trackpadParams.x = screenWidth - trackpadParams.width
-            trackpadParams.y = 0
-            windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
-            updateBorderColor(0xFFFF0000.toInt())
-        } else {
-            isKeyboardMode = false
-            trackpadParams.x = savedWindowX
-            trackpadParams.y = savedWindowY
-            windowManager?.updateViewLayout(trackpadLayout, trackpadParams)
-            updateBorderColor(0x55FFFFFF.toInt())
-        }
+    override fun onDestroy() { 
+        super.onDestroy(); try { unregisterReceiver(switchReceiver) } catch(e: Exception) {}
+        displayManager?.unregisterDisplayListener(this); keyboardOverlay?.hide()
+        if (trackpadLayout != null) windowManager?.removeView(trackpadLayout)
+        if (cursorLayout != null) windowManager?.removeView(cursorLayout)
+        removeRemoteCursor()
+        if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) 
     }
-
-    private fun openMenuHandle(event: MotionEvent): Boolean { if (event.action == MotionEvent.ACTION_DOWN) { vibrate(); val intent = Intent(this, MainActivity::class.java).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }; startActivity(intent); return true }; return false }
-    private fun voiceWindow(event: MotionEvent): Boolean { if(event.action == MotionEvent.ACTION_DOWN) { handler.postDelayed(voiceRunnable, 1000); return true } else if (event.action == MotionEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if(!isKeyboardMode) updateBorderColor(0x55FFFFFF.toInt()); return true }; return false }
     
-    private fun loadPrefs() { val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE); cursorSpeed = p.getFloat("cursor_speed", 2.5f); scrollSpeed = p.getFloat("scroll_speed", 3.0f); prefVibrate = p.getBoolean("vibrate", true); prefReverseScroll = p.getBoolean("reverse_scroll", true); prefAlpha = p.getInt("alpha", 200); prefLocked = p.getBoolean("lock_position", false); prefVPosLeft = p.getBoolean("v_pos_left", false); prefHPosTop = p.getBoolean("h_pos_top", false); prefHandleTouchSize = p.getInt("handle_touch_size", 60); prefScrollTouchSize = p.getInt("scroll_touch_size", 60); prefHandleSize = p.getInt("handle_size", 60); prefScrollVisualSize = p.getInt("scroll_visual_size", 4); scrollZoneThickness = prefScrollTouchSize }
-    private fun handlePreview(intent: Intent) { val t = intent.getStringExtra("TARGET"); val v = intent.getIntExtra("VALUE", 0); handler.removeCallbacks(clearHighlightsRunnable); when (t) { "alpha" -> { prefAlpha = v; highlightAlpha = true; updateBorderColor(currentBorderColor) }; "handle_touch" -> { prefHandleTouchSize = v; highlightHandles = true; updateLayoutSizes() }; "scroll_touch" -> { prefScrollTouchSize = v; scrollZoneThickness = v; highlightScrolls = true; updateLayoutSizes(); updateScrollPosition() }; "handle_size" -> { prefHandleSize = v; highlightHandles = true; updateHandleSize() }; "scroll_visual" -> { prefScrollVisualSize = v; highlightScrolls = true; updateLayoutSizes() } }; handler.postDelayed(clearHighlightsRunnable, 1500) }
+    private fun toggleKeyboardMode() { vibrate(); isRightDragPending = false; if (!isKeyboardMode) { isKeyboardMode = true; savedWindowX = trackpadParams.x; savedWindowY = trackpadParams.y; trackpadParams.x = uiScreenWidth - trackpadParams.width; trackpadParams.y = 0; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(0xFFFF0000.toInt()) } else { isKeyboardMode = false; trackpadParams.x = savedWindowX; trackpadParams.y = savedWindowY; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } }
+    private fun openMenuHandle(event: MotionEvent): Boolean { if (event.action == MotionEvent.ACTION_DOWN) { vibrate(); val intent = Intent(this, MainActivity::class.java).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }; startActivity(intent); return true }; return false }
+    
+    private var keyboardHandleDownTime = 0L
+    private val keyboardLongPressRunnable = Runnable { toggleKeyboardMode() }
+    
+    private fun keyboardHandle(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> { keyboardHandleDownTime = SystemClock.uptimeMillis(); handler.postDelayed(keyboardLongPressRunnable, 800); return true }
+            MotionEvent.ACTION_UP -> { 
+                handler.removeCallbacks(keyboardLongPressRunnable)
+                if (SystemClock.uptimeMillis() - keyboardHandleDownTime < 800) { toggleCustomKeyboard() }
+                return true 
+            }
+            MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(keyboardLongPressRunnable); return true }
+        }
+        return false
+    }
+    
+    private fun voiceWindow(event: MotionEvent): Boolean { if(event.action == MotionEvent.ACTION_DOWN) { handler.postDelayed(voiceRunnable, 1000); return true } else if (event.action == MotionEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if(!isKeyboardMode) { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }; return true }; return false }
+    private fun loadPrefs() { val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE); cursorSpeed = p.getFloat("cursor_speed", 2.5f); scrollSpeed = p.getFloat("scroll_speed", 3.0f); prefVibrate = p.getBoolean("vibrate", true); prefReverseScroll = p.getBoolean("reverse_scroll", true); prefAlpha = p.getInt("alpha", 200); prefLocked = p.getBoolean("lock_position", false); prefVPosLeft = p.getBoolean("v_pos_left", false); prefHPosTop = p.getBoolean("h_pos_top", false); prefHandleTouchSize = p.getInt("handle_touch_size", 60); prefScrollTouchSize = p.getInt("scroll_touch_size", 60); prefHandleSize = p.getInt("handle_size", 60); prefScrollVisualSize = p.getInt("scroll_visual_size", 4); scrollZoneThickness = prefScrollTouchSize; prefCursorSize = p.getInt("cursor_size", 50) }
+    private fun handlePreview(intent: Intent) { val t = intent.getStringExtra("TARGET"); val v = intent.getIntExtra("VALUE", 0); handler.removeCallbacks(clearHighlightsRunnable); when (t) { "alpha" -> { prefAlpha = v; highlightAlpha = true; updateBorderColor(currentBorderColor) }; "handle_touch" -> { prefHandleTouchSize = v; highlightHandles = true; updateLayoutSizes() }; "scroll_touch" -> { prefScrollTouchSize = v; scrollZoneThickness = v; highlightScrolls = true; updateLayoutSizes(); updateScrollPosition() }; "handle_size" -> { prefHandleSize = v; highlightHandles = true; updateHandleSize() }; "scroll_visual" -> { prefScrollVisualSize = v; highlightScrolls = true; updateLayoutSizes() }; "cursor_size" -> { prefCursorSize = v; updateCursorSize() } }; handler.postDelayed(clearHighlightsRunnable, 1500) }
     private fun addHandle(context: Context, gravity: Int, color: Int, onTouch: (View, MotionEvent) -> Boolean) { val c = FrameLayout(context); val cp = FrameLayout.LayoutParams(prefHandleTouchSize, prefHandleTouchSize); cp.gravity = gravity; val v = View(context); val bg = GradientDrawable(); bg.setColor(color); bg.cornerRadii = floatArrayOf(15f,15f, 15f,15f, 15f,15f, 15f,15f); v.background = bg; val vp = FrameLayout.LayoutParams(prefHandleSize, prefHandleSize); vp.gravity = Gravity.CENTER; c.addView(v, vp); handleVisuals.add(v); handleContainers.add(c); trackpadLayout?.addView(c, cp); c.setOnTouchListener { view, e -> onTouch(view, e) } }
     private fun updateHandleSize() { for (v in handleVisuals) { val p = v.layoutParams; p.width = prefHandleSize; p.height = prefHandleSize; v.layoutParams = p } }
     private fun updateLayoutSizes() { for (c in handleContainers) { val p = c.layoutParams; p.width = prefHandleTouchSize; p.height = prefHandleTouchSize; c.layoutParams = p }; updateScrollPosition() } 
