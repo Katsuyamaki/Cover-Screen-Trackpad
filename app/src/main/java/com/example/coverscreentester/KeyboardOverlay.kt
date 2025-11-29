@@ -1,11 +1,10 @@
+
 package com.example.coverscreentester
 
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
@@ -149,7 +148,7 @@ class KeyboardOverlay(
         buttonParams.gravity = Gravity.TOP or Gravity.RIGHT
         buttonParams.setMargins(0, 2, 4, 0)
         val closeText = TextView(context)
-        closeText.text = "✕"
+        closeText.text = "X"
         closeText.setTextColor(Color.parseColor("#FF5555"))
         closeText.textSize = 12f
         closeText.gravity = Gravity.CENTER
@@ -160,7 +159,7 @@ class KeyboardOverlay(
 
     private fun addTargetLabel() {
         val label = TextView(context)
-        label.text = "→ Display $targetDisplayId"
+        label.text = "Display $targetDisplayId"
         label.setTextColor(Color.parseColor("#888888"))
         label.textSize = 9f
         val labelParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
@@ -204,7 +203,22 @@ class KeyboardOverlay(
     }
 
     override fun onKeyPress(keyCode: Int, char: Char?) { injectKey(keyCode) }
-    override fun onTextInput(text: String) { for (char in text) injectCharacter(char) }
+    
+    override fun onTextInput(text: String) {
+        if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
+        
+        // Use input text command - handles all characters including shifted ones
+        Thread {
+            try {
+                // Escape special shell characters
+                val escaped = escapeForShell(text)
+                val cmd = "input -d $targetDisplayId text $escaped"
+                shellService.runCommand(cmd)
+            } catch (e: Exception) { 
+                Log.e(TAG, "Text injection failed: $text", e) 
+            }
+        }.start()
+    }
 
     override fun onSpecialKey(key: KeyboardView.SpecialKey) {
         val keyCode = when (key) {
@@ -232,49 +246,43 @@ class KeyboardOverlay(
         if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
         Thread {
             try {
-                shellService.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_DOWN, targetDisplayId)
-                Thread.sleep(20)
-                shellService.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_UP, targetDisplayId)
+                // Use input keyevent command with display parameter
+                val cmd = "input -d $targetDisplayId keyevent $keyCode"
+                shellService.runCommand(cmd)
             } catch (e: Exception) { Log.e(TAG, "Key injection failed", e) }
         }.start()
     }
-
-    private fun injectCharacter(char: Char) {
-        if (shellService == null) { Log.w(TAG, "Shell service not available"); return }
-        val keyCode = getKeyCodeForChar(char)
-        val needsShift = char.isUpperCase() || isShiftRequired(char)
-        Thread {
-            try {
-                if (needsShift) { shellService.injectKeyOnDisplay(KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_DOWN, targetDisplayId); Thread.sleep(10) }
-                shellService.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_DOWN, targetDisplayId)
-                Thread.sleep(20)
-                shellService.injectKeyOnDisplay(keyCode, KeyEvent.ACTION_UP, targetDisplayId)
-                if (needsShift) { Thread.sleep(10); shellService.injectKeyOnDisplay(KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.ACTION_UP, targetDisplayId) }
-            } catch (e: Exception) { Log.e(TAG, "Character injection failed", e) }
-        }.start()
+    
+    private fun escapeForShell(text: String): String {
+        val sb = StringBuilder()
+        for (c in text) {
+            when (c) {
+                ' ' -> sb.append("%s")
+                '\'' -> sb.append("'")
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '`' -> sb.append("\\`")
+                '$' -> sb.append("\\$")
+                '&' -> sb.append("\\&")
+                '|' -> sb.append("\\|")
+                ';' -> sb.append("\\;")
+                '(' -> sb.append("\\(")
+                ')' -> sb.append("\\)")
+                '<' -> sb.append("\\<")
+                '>' -> sb.append("\\>")
+                '!' -> sb.append("\\!")
+                '?' -> sb.append("\\?")
+                '*' -> sb.append("\\*")
+                '[' -> sb.append("\\[")
+                ']' -> sb.append("\\]")
+                '{' -> sb.append("\\{")
+                '}' -> sb.append("\\}")
+                '#' -> sb.append("\\#")
+                '~' -> sb.append("\\~")
+                '^' -> sb.append("\\^")
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
     }
-
-    private fun getKeyCodeForChar(char: Char): Int = when (char.lowercaseChar()) {
-        'a' -> KeyEvent.KEYCODE_A; 'b' -> KeyEvent.KEYCODE_B; 'c' -> KeyEvent.KEYCODE_C; 'd' -> KeyEvent.KEYCODE_D
-        'e' -> KeyEvent.KEYCODE_E; 'f' -> KeyEvent.KEYCODE_F; 'g' -> KeyEvent.KEYCODE_G; 'h' -> KeyEvent.KEYCODE_H
-        'i' -> KeyEvent.KEYCODE_I; 'j' -> KeyEvent.KEYCODE_J; 'k' -> KeyEvent.KEYCODE_K; 'l' -> KeyEvent.KEYCODE_L
-        'm' -> KeyEvent.KEYCODE_M; 'n' -> KeyEvent.KEYCODE_N; 'o' -> KeyEvent.KEYCODE_O; 'p' -> KeyEvent.KEYCODE_P
-        'q' -> KeyEvent.KEYCODE_Q; 'r' -> KeyEvent.KEYCODE_R; 's' -> KeyEvent.KEYCODE_S; 't' -> KeyEvent.KEYCODE_T
-        'u' -> KeyEvent.KEYCODE_U; 'v' -> KeyEvent.KEYCODE_V; 'w' -> KeyEvent.KEYCODE_W; 'x' -> KeyEvent.KEYCODE_X
-        'y' -> KeyEvent.KEYCODE_Y; 'z' -> KeyEvent.KEYCODE_Z
-        '0', ')' -> KeyEvent.KEYCODE_0; '1', '!' -> KeyEvent.KEYCODE_1; '2', '@' -> KeyEvent.KEYCODE_2
-        '3', '#' -> KeyEvent.KEYCODE_3; '4', '$' -> KeyEvent.KEYCODE_4; '5', '%' -> KeyEvent.KEYCODE_5
-        '6', '^' -> KeyEvent.KEYCODE_6; '7', '&' -> KeyEvent.KEYCODE_7; '8', '*' -> KeyEvent.KEYCODE_8
-        '9', '(' -> KeyEvent.KEYCODE_9; ' ' -> KeyEvent.KEYCODE_SPACE; '.' -> KeyEvent.KEYCODE_PERIOD
-        ',' -> KeyEvent.KEYCODE_COMMA; ';', ':' -> KeyEvent.KEYCODE_SEMICOLON; '\'', '"' -> KeyEvent.KEYCODE_APOSTROPHE
-        '/', '?' -> KeyEvent.KEYCODE_SLASH; '\\', '|' -> KeyEvent.KEYCODE_BACKSLASH
-        '[', '{' -> KeyEvent.KEYCODE_LEFT_BRACKET; ']', '}' -> KeyEvent.KEYCODE_RIGHT_BRACKET
-        '-', '_' -> KeyEvent.KEYCODE_MINUS; '=', '+' -> KeyEvent.KEYCODE_EQUALS; '`', '~' -> KeyEvent.KEYCODE_GRAVE
-        '<' -> KeyEvent.KEYCODE_COMMA; '>' -> KeyEvent.KEYCODE_PERIOD
-        else -> KeyEvent.KEYCODE_UNKNOWN
-    }
-
-    private fun isShiftRequired(char: Char): Boolean = char in listOf(
-        '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~'
-    )
 }
