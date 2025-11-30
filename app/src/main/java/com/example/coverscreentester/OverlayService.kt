@@ -13,7 +13,6 @@ import android.content.ServiceConnection
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -146,6 +145,9 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var isMoving = false
     private val moveLongPressRunnable = Runnable { startMove() }
     private val voiceRunnable = Runnable { toggleKeyboardMode() }
+    
+    private var keyboardHandleDownTime = 0L
+    private val keyboardLongPressRunnable = Runnable { toggleKeyboardMode() }
     
     private val clearHighlightsRunnable = Runnable {
         highlightAlpha = false; highlightHandles = false; highlightScrolls = false
@@ -536,10 +538,6 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private fun stopResize() { isResizing = false; saveOverlaySize(); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }
     
     private fun handleTrackpadTouch(event: MotionEvent) {
-        if (isPreviewMode || !isTrackpadVisible || isClicking) {
-            return
-        }
-        
         val viewWidth = trackpadLayout?.width ?: 0
         val viewHeight = trackpadLayout?.height ?: 0
         
@@ -626,22 +624,21 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                         try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} 
                     }
                     
-                    // SELF-INTERSECTION CHECK:
-                    // If target is LOCAL (same display) AND cursor is inside trackpad window bounds...
-                    // DO NOT INJECT EVENTS. This prevents the "Stuck" infinite loop / Action Cancel.
+                    // START FIX: Calculate Collision
                     var skipInjection = false
                     if (inputTargetDisplayId == currentDisplayId && trackpadLayout != null) {
-                        val tX = trackpadParams.x
-                        val tY = trackpadParams.y
-                        val tW = trackpadParams.width
-                        val tH = trackpadParams.height
+                        val tX = trackpadParams.x.toFloat()
+                        val tY = trackpadParams.y.toFloat()
+                        val tW = trackpadParams.width.toFloat()
+                        val tH = trackpadParams.height.toFloat()
                         
-                        // Simple AABB collision check
+                        // Expand bounds slightly to prevent edge jitter
                         if (cursorX >= tX && cursorX <= (tX + tW) && 
                             cursorY >= tY && cursorY <= (tY + tH)) {
                             skipInjection = true
                         }
                     }
+                    // END FIX
 
                     if (!skipInjection) {
                         if (isTouchDragging && hasSentTouchDown) {
@@ -681,93 +678,25 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
             } 
         } 
     }
-    
     private fun performRotation() { rotationAngle = (rotationAngle + 90) % 360; cursorView?.rotation = rotationAngle.toFloat(); vibrate(); updateBorderColor(0xFFFFFF00.toInt()); }
-    
-    private fun startKeyDrag(b: Int) { 
-        vibrate(); updateBorderColor(0xFF00FF00.toInt())
-        dragDownTime = SystemClock.uptimeMillis()
-        injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, b, dragDownTime)
-        hasSentMouseDown = true
-    }
-    
+    private fun startKeyDrag(b: Int) { vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, b, dragDownTime); hasSentMouseDown = true }
     private fun stopKeyDrag(b: Int) { 
-        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
-        else updateBorderColor(0x55FFFFFF.toInt())
-        if (hasSentMouseDown) {
-            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime)
-        }
+        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt())
+        if (hasSentMouseDown) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
         hasSentMouseDown = false
     }
-    
-    private fun startTouchDrag() { 
-        isTouchDragging = true; vibrate(); updateBorderColor(0xFF00FF00.toInt())
-        dragDownTime = SystemClock.uptimeMillis()
-        injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
-        hasSentTouchDown = true
-    }
-    
+    private fun startTouchDrag() { isTouchDragging = true; vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime); hasSentTouchDown = true }
     private fun stopTouchDrag() { 
         isTouchDragging = false
-        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
-        else updateBorderColor(0x55FFFFFF.toInt())
-        if (hasSentTouchDown) {
-            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
-        }
+        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt())
+        if (hasSentTouchDown) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime) }
         hasSentTouchDown = false
     }
-    
-    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { 
-        if (shellService == null) return
-        Thread { 
-            try { shellService?.injectMouse(a, x, y, inputTargetDisplayId, s, b, t) } 
-            catch (e: Exception) { Log.e("OverlayService", "Inject failed", e) } 
-        }.start() 
-    }
-    
+    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { if (shellService == null) return; val dId = cursorLayout?.display?.displayId ?: Display.DEFAULT_DISPLAY; Thread { try { shellService?.injectMouse(a, x, y, dId, s, b, t) } catch (e: Exception) {} }.start() }
+    private fun injectScroll(v: Float, h: Float) { if (shellService == null) return; val dId = cursorLayout?.display?.displayId ?: Display.DEFAULT_DISPLAY; Thread { try { shellService?.injectScroll(cursorX, cursorY, v, h, dId) } catch (e: Exception) {} }.start() }
     private fun performClick(r: Boolean) { 
         if (shellService == null) { bindShizuku(); return }
-        if (isClicking) return
-        isClicking = true
-        
-        var isObstructed = false
-        if (trackpadLayout != null && inputTargetDisplayId == currentDisplayId) {
-            val winX = trackpadParams.x
-            val winY = trackpadParams.y
-            val winW = trackpadParams.width
-            val winH = trackpadParams.height
-            if (cursorX >= winX && cursorX <= (winX + winW) && cursorY >= winY && cursorY <= (winY + winH)) {
-                isObstructed = true
-            }
-        }
-        
-        if (isObstructed) {
-            trackpadParams.flags = trackpadParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-            try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } catch(e: Exception) {}
-            
-            handler.postDelayed({
-                Thread { 
-                    try { 
-                        if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
-                        else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
-                    } catch (e: Exception) {} 
-                }.start()
-                
-                handler.postDelayed({
-                    trackpadParams.flags = trackpadParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                    try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } catch(e: Exception) {}
-                    isClicking = false
-                }, 100)
-            }, 50)
-        } else {
-            Thread { 
-                try { 
-                    if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
-                    else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
-                } catch (e: Exception) {} 
-            }.start()
-            handler.postDelayed({ isClicking = false }, 100)
-        }
+        Thread { try { if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) } catch (e: Exception) {} }.start()
     }
     
     private fun cycleInputTarget() { 
@@ -795,21 +724,9 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private fun vibrate() { if (!prefVibrate) return; val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator; if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(50) }
     private fun bindShizuku() { try { val c = ComponentName(packageName, ShellUserService::class.java.name); ShizukuBinder.bind(c, userServiceConnection, BuildConfig.DEBUG, BuildConfig.VERSION_CODE) } catch (e: Exception) {} }
     private fun createNotification() { val c = NotificationChannel("overlay_service", "Trackpad Active", NotificationManager.IMPORTANCE_LOW); (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(c); val n = Notification.Builder(this, "overlay_service").setContentTitle("Trackpad Active").setSmallIcon(R.mipmap.ic_launcher).build(); if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(1, n) }
-    
-    override fun onDestroy() { 
-        super.onDestroy(); try { unregisterReceiver(switchReceiver) } catch(e: Exception) {}
-        displayManager?.unregisterDisplayListener(this); keyboardOverlay?.hide()
-        if (trackpadLayout != null) windowManager?.removeView(trackpadLayout)
-        if (cursorLayout != null) windowManager?.removeView(cursorLayout)
-        removeRemoteCursor()
-        if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) 
-    }
-    
-    private fun toggleKeyboardMode() { vibrate(); isRightDragPending = false; if (!isKeyboardMode) { isKeyboardMode = true; savedWindowX = trackpadParams.x; savedWindowY = trackpadParams.y; trackpadParams.x = uiScreenWidth - trackpadParams.width; trackpadParams.y = 0; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(0xFFFF0000.toInt()) } else { isKeyboardMode = false; trackpadParams.x = savedWindowX; trackpadParams.y = savedWindowY; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } }
+    override fun onDestroy() { super.onDestroy(); try { unregisterReceiver(switchReceiver) } catch(e: Exception) {}; displayManager?.unregisterDisplayListener(this); if (trackpadLayout != null) windowManager?.removeView(trackpadLayout); if (cursorLayout != null) windowManager?.removeView(cursorLayout); removeRemoteCursor(); if (isBound) ShizukuBinder.unbind(ComponentName(packageName, ShellUserService::class.java.name), userServiceConnection) }
+    private fun toggleKeyboardMode() { vibrate(); isRightDragPending = false; if (!isKeyboardMode) { isKeyboardMode = true; savedWindowX = trackpadParams.x; savedWindowY = trackpadParams.y; trackpadParams.x = uiScreenWidth - trackpadParams.width; trackpadParams.y = 0; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(0xFFFF0000.toInt()) } else { isKeyboardMode = false; trackpadParams.x = savedWindowX; trackpadParams.y = savedWindowY; windowManager?.updateViewLayout(trackpadLayout, trackpadParams); updateBorderColor(currentBorderColor) } }
     private fun openMenuHandle(event: MotionEvent): Boolean { if (event.action == MotionEvent.ACTION_DOWN) { vibrate(); val intent = Intent(this, MainActivity::class.java).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }; startActivity(intent); return true }; return false }
-    
-    private var keyboardHandleDownTime = 0L
-    private val keyboardLongPressRunnable = Runnable { toggleKeyboardMode() }
     
     private fun keyboardHandle(event: MotionEvent): Boolean {
         when (event.action) {
@@ -824,7 +741,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         return false
     }
     
-    private fun voiceWindow(event: MotionEvent): Boolean { if(event.action == MotionEvent.ACTION_DOWN) { handler.postDelayed(voiceRunnable, 1000); return true } else if (event.action == MotionEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if(!isKeyboardMode) { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) }; return true }; return false }
+    private fun voiceWindow(event: MotionEvent): Boolean { if(event.action == MotionEvent.ACTION_DOWN) { handler.postDelayed(voiceRunnable, 1000); return true } else if (event.action == MotionEvent.ACTION_UP) { handler.removeCallbacks(voiceRunnable); if(!isKeyboardMode) updateBorderColor(currentBorderColor); return true }; return false }
     private fun loadPrefs() { val p = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE); cursorSpeed = p.getFloat("cursor_speed", 2.5f); scrollSpeed = p.getFloat("scroll_speed", 3.0f); prefVibrate = p.getBoolean("vibrate", true); prefReverseScroll = p.getBoolean("reverse_scroll", true); prefAlpha = p.getInt("alpha", 200); prefLocked = p.getBoolean("lock_position", false); prefVPosLeft = p.getBoolean("v_pos_left", false); prefHPosTop = p.getBoolean("h_pos_top", false); prefHandleTouchSize = p.getInt("handle_touch_size", 60); prefScrollTouchSize = p.getInt("scroll_touch_size", 60); prefHandleSize = p.getInt("handle_size", 60); prefScrollVisualSize = p.getInt("scroll_visual_size", 4); scrollZoneThickness = prefScrollTouchSize; prefCursorSize = p.getInt("cursor_size", 50) }
     private fun handlePreview(intent: Intent) { val t = intent.getStringExtra("TARGET"); val v = intent.getIntExtra("VALUE", 0); handler.removeCallbacks(clearHighlightsRunnable); when (t) { "alpha" -> { prefAlpha = v; highlightAlpha = true; updateBorderColor(currentBorderColor) }; "handle_touch" -> { prefHandleTouchSize = v; highlightHandles = true; updateLayoutSizes() }; "scroll_touch" -> { prefScrollTouchSize = v; scrollZoneThickness = v; highlightScrolls = true; updateLayoutSizes(); updateScrollPosition() }; "handle_size" -> { prefHandleSize = v; highlightHandles = true; updateHandleSize() }; "scroll_visual" -> { prefScrollVisualSize = v; highlightScrolls = true; updateLayoutSizes() }; "cursor_size" -> { prefCursorSize = v; updateCursorSize() } }; handler.postDelayed(clearHighlightsRunnable, 1500) }
     private fun addHandle(context: Context, gravity: Int, color: Int, onTouch: (View, MotionEvent) -> Boolean) { val c = FrameLayout(context); val cp = FrameLayout.LayoutParams(prefHandleTouchSize, prefHandleTouchSize); cp.gravity = gravity; val v = View(context); val bg = GradientDrawable(); bg.setColor(color); bg.cornerRadii = floatArrayOf(15f,15f, 15f,15f, 15f,15f, 15f,15f); v.background = bg; val vp = FrameLayout.LayoutParams(prefHandleSize, prefHandleSize); vp.gravity = Gravity.CENTER; c.addView(v, vp); handleVisuals.add(v); handleContainers.add(c); trackpadLayout?.addView(c, cp); c.setOnTouchListener { view, e -> onTouch(view, e) } }
