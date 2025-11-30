@@ -1,205 +1,76 @@
 package com.example.coverscreentester
 
-import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
-import android.content.Context
+import android.app.Service
 import android.content.Intent
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.RectF
-import android.view.Gravity
-import android.view.MotionEvent
+import android.os.IBinder
+import android.view.LayoutInflater
+import android.view.View
 import android.view.WindowManager
-import android.view.WindowManager.LayoutParams
-import android.widget.FrameLayout
-import kotlin.math.abs
+import android.widget.Button
+import android.widget.Toast
 
-class TrackpadService : AccessibilityService() {
+class TrackpadService : Service() {
 
     private lateinit var windowManager: WindowManager
-    private lateinit var trackpadView: FrameLayout
-    private var isTrackpadVisible = false
+    private var overlayView: View? = null
 
-    // Settings
-    private var cursorSpeed = 1.0f
-    private var scrollFactor = 20.0f
-    private var placeVerticalLeft = false
-    private var placeHorizontalTop = false
-
-    // State
-    private var lastX = 0f
-    private var lastY = 0f
-    private var isDragging = false
-    private var isScrolling = false
-    
-    // Scrollbar Drawing
-    private val barThickness = 60f // Touch area thickness
-    private val barVisualThickness = 15f // Visual line thickness
-    
-    private val paintTrack = Paint().apply {
-        color = Color.parseColor("#33FFFFFF") 
-        style = Paint.Style.FILL
-    }
-    private val paintThumb = Paint().apply {
-        color = Color.CYAN
-        style = Paint.Style.FILL
-        isAntiAlias = true
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
     }
 
-    private var lastScrollXPercent = 0.5f 
-    private var lastScrollYPercent = 0.5f
-
-    override fun onServiceConnected() {
+    override fun onCreate() {
+        super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        loadSettings()
-    }
 
-    private fun loadSettings() {
-        val prefs = getSharedPreferences("TrackpadPrefs", Context.MODE_PRIVATE)
-        cursorSpeed = prefs.getFloat("cursor_speed", 1.0f)
-        scrollFactor = prefs.getFloat("scroll_speed", 20.0f)
-        placeVerticalLeft = prefs.getBoolean("vertical_left", false)
-        placeHorizontalTop = prefs.getBoolean("horizontal_top", false)
-    }
-
-    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) {}
-    override fun onInterrupt() {}
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "TOGGLE_TRACKPAD") {
-            if (isTrackpadVisible) removeTrackpad() else showTrackpad()
-        }
-        return super.onStartCommand(intent, flags, startId)
-    }
-
-    private fun showTrackpad() {
-        loadSettings() 
-        
-        trackpadView = object : FrameLayout(this) {
-            override fun onDraw(canvas: Canvas) {
-                super.onDraw(canvas)
-                drawScrollBars(canvas, width, height)
-            }
-        }
-        
-        trackpadView.setBackgroundColor(Color.parseColor("#99000000")) 
-
-        trackpadView.setOnTouchListener { v, event ->
-            handleTouch(event, v.width, v.height)
-            v.invalidate() 
-            true
-        }
-
-        val params = LayoutParams(
-            LayoutParams.MATCH_PARENT,
-            LayoutParams.MATCH_PARENT,
-            LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        // Layout Params: TYPE_APPLICATION_OVERLAY is crucial for Android 8.0+
+        // FLAG_NOT_FOCUSABLE ensures the overlay doesn't eat physical button presses (like Power/Vol)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
-        params.gravity = Gravity.TOP or Gravity.LEFT
 
-        windowManager.addView(trackpadView, params)
-        isTrackpadVisible = true
-    }
+        try {
+            val inflater = LayoutInflater.from(this)
+            overlayView = inflater.inflate(R.layout.service_overlay, null)
 
-    private fun removeTrackpad() {
-        if (isTrackpadVisible) {
-            windowManager.removeView(trackpadView)
-            isTrackpadVisible = false
+            // Setup Safety Exit Button
+            val closeBtn = overlayView?.findViewById<Button>(R.id.btn_close)
+            closeBtn?.setOnClickListener {
+                stopSelf()
+            }
+
+            // Setup Trackpad Touch Listener
+            val trackpadView = overlayView?.findViewById<View>(R.id.view_trackpad)
+            trackpadView?.setOnTouchListener { _, event ->
+                // This consumes the touch event so it doesn't pass through to the launcher
+                // We will add the Shizuku injection logic here next.
+                true
+            }
+
+            windowManager.addView(overlayView, params)
+            Toast.makeText(this, "Trackpad Overlay Started", Toast.LENGTH_SHORT).show()
+
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
-    private fun drawScrollBars(canvas: Canvas, width: Int, height: Int) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        
-        // Vertical
-        val vLeft = if (placeVerticalLeft) 0f else w - barVisualThickness
-        val vRight = if (placeVerticalLeft) barVisualThickness else w
-
-        canvas.drawRect(vLeft, 0f, vRight, h, paintTrack)
-
-        val vThumbHeight = h * 0.2f
-        val vThumbTop = (h * lastScrollYPercent) - (vThumbHeight / 2)
-        canvas.drawRoundRect(RectF(vLeft, vThumbTop, vRight, vThumbTop + vThumbHeight), 5f, 5f, paintThumb)
-
-        // Horizontal
-        val hTop = if (placeHorizontalTop) 0f else h - barVisualThickness
-        val hBottom = if (placeHorizontalTop) barVisualThickness else h
-
-        canvas.drawRect(0f, hTop, w, hBottom, paintTrack)
-        
-        val hThumbWidth = w * 0.2f
-        val hThumbLeft = (w * lastScrollXPercent) - (hThumbWidth / 2)
-        canvas.drawRoundRect(RectF(hThumbLeft, hTop, hThumbLeft + hThumbWidth, hBottom), 5f, 5f, paintThumb)
-    }
-
-    private fun handleTouch(event: MotionEvent, width: Int, height: Int) {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                lastX = event.x
-                lastY = event.y
-                
-                val inVerticalZone = if (placeVerticalLeft) (event.x < barThickness) else (event.x > width - barThickness)
-                val inHorizontalZone = if (placeHorizontalTop) (event.y < barThickness) else (event.y > height - barThickness)
-                
-                if (inVerticalZone || inHorizontalZone) {
-                    isScrolling = true
-                } else {
-                    isDragging = true
-                }
+    override fun onDestroy() {
+        super.onDestroy()
+        if (overlayView != null) {
+            try {
+                windowManager.removeView(overlayView)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            
-            MotionEvent.ACTION_MOVE -> {
-                val deltaX = event.x - lastX
-                val deltaY = event.y - lastY
-
-                if (isScrolling) {
-                    if (abs(deltaX) > 2 || abs(deltaY) > 2) {
-                        // Visual update only for now
-                        lastScrollXPercent = (event.x / width).coerceIn(0.1f, 0.9f)
-                        lastScrollYPercent = (event.y / height).coerceIn(0.1f, 0.9f)
-                    }
-                } else if (isDragging) {
-                    performMouseClick(deltaX * cursorSpeed, deltaY * cursorSpeed)
-                }
-
-                lastX = event.x
-                lastY = event.y
-            }
-            
-            MotionEvent.ACTION_UP -> {
-                if (!isScrolling && !isDragging) {
-                    dispatchGesture(createClick(lastX, lastY), null, null)
-                }
-                isDragging = false
-                isScrolling = false
-            }
+            overlayView = null
         }
-    }
-
-    private fun performMouseClick(dx: Float, dy: Float) {
-        if (abs(dx) > 1 || abs(dy) > 1) {
-            val path = Path()
-            path.moveTo(lastX, lastY)
-            path.lineTo(lastX + dx, lastY + dy)
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 10))
-                .build()
-            dispatchGesture(gesture, null, null)
-        }
-    }
-
-    private fun createClick(x: Float, y: Float): GestureDescription {
-        val path = Path()
-        path.moveTo(x, y)
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
-            .build()
-        return gesture
+        Toast.makeText(this, "Trackpad Overlay Stopped", Toast.LENGTH_SHORT).show()
     }
 }
