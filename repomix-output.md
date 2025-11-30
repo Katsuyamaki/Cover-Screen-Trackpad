@@ -2788,6 +2788,96 @@ Open the app menu (Bottom-Left handle) to configure:
 This project is currently in **Alpha**. It is intended for testing and development purposes. Use at your own risk.
 ```
 
+## File: app/src/main/res/xml/accessibility_service_config.xml
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="false"
+    android:canPerformGestures="false" 
+    android:canRequestFilterKeyEvents="true" 
+    android:accessibilityFlags="flagRequestTouchExplorationMode|flagRequestFilterKeyEvents" />
+```
+
+## File: app/build.gradle.kts
+```
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+android {
+    namespace = "com.example.coverscreentester"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.example.coverscreentester"
+        minSdk = 30
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+        aidl = true // <--- CRITICAL: Must be enabled
+    }
+
+    // Fixes "Unresolved Reference" for AIDL classes
+    sourceSets {
+        getByName("main") {
+            aidl.srcDirs(listOf("src/main/aidl"))
+            java.srcDirs(layout.buildDirectory.dir("generated/source/aidl/debug"))
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // Shizuku
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+    implementation("dev.rikka.shizuku:aidl:13.1.5")
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.constraintlayout)
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+}
+```
+
+## File: gradle.properties
+```
+org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
+```
+
 ## File: app/src/main/java/com/example/coverscreentester/KeyboardOverlay.kt
 ```kotlin
 package com.example.coverscreentester
@@ -3094,96 +3184,6 @@ class KeyboardOverlay(
         return sb.toString()
     }
 }
-```
-
-## File: app/src/main/res/xml/accessibility_service_config.xml
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/accessibility_service_description"
-    android:accessibilityEventTypes="typeAllMask"
-    android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="100"
-    android:canRetrieveWindowContent="false"
-    android:canPerformGestures="false" 
-    android:canRequestFilterKeyEvents="true" 
-    android:accessibilityFlags="flagRequestTouchExplorationMode|flagRequestFilterKeyEvents" />
-```
-
-## File: app/build.gradle.kts
-```
-plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-}
-
-android {
-    namespace = "com.example.coverscreentester"
-    compileSdk = 34
-
-    defaultConfig {
-        applicationId = "com.example.coverscreentester"
-        minSdk = 30
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    buildFeatures {
-        viewBinding = true
-        buildConfig = true
-        aidl = true // <--- CRITICAL: Must be enabled
-    }
-
-    // Fixes "Unresolved Reference" for AIDL classes
-    sourceSets {
-        getByName("main") {
-            aidl.srcDirs(listOf("src/main/aidl"))
-            java.srcDirs(layout.buildDirectory.dir("generated/source/aidl/debug"))
-        }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    // Shizuku
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("dev.rikka.shizuku:aidl:13.1.5")
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    implementation(libs.androidx.activity)
-    implementation(libs.androidx.constraintlayout)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-}
-```
-
-## File: gradle.properties
-```
-org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
 ```
 
 ## File: app/src/main/res/layout/activity_settings.xml
@@ -4320,6 +4320,11 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     private var isHScrolling = false
     private var dragDownTime: Long = 0L
     
+    // Track if we actually sent a DOWN event to avoid orphan UP events
+    private var hasSentTouchDown = false
+    private var hasSentMouseDown = false
+    private var hasSentScrollDown = false
+    
     private var cursorSpeed = 2.5f
     private var scrollSpeed = 3.0f 
     private var scrollZoneThickness = 60 
@@ -4489,21 +4494,25 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     }
     
     private fun setTrackpadVisibility(visible: Boolean) {
-        isTrackpadVisible = visible
-        
-        if (!visible) {
+        if (!visible && isTrackpadVisible) {
+            // Only reset if we're hiding and were visible
             resetAllTouchStates()
         }
         
+        isTrackpadVisible = visible
         trackpadLayout?.visibility = if (visible) View.VISIBLE else View.GONE
         cursorLayout?.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     private fun setPreviewMode(preview: Boolean) {
+        if (preview && !isPreviewMode) {
+            // Only reset if entering preview mode
+            resetAllTouchStates()
+        }
+        
         isPreviewMode = preview
         
         if (preview) {
-            resetAllTouchStates()
             trackpadLayout?.visibility = View.VISIBLE
             cursorLayout?.visibility = View.VISIBLE
             trackpadParams.flags = trackpadParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -4521,36 +4530,42 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
     }
     
     private fun resetAllTouchStates() {
+        // Remove all pending callbacks first
         handler.removeCallbacks(longPressRunnable)
         handler.removeCallbacks(resizeLongPressRunnable)
         handler.removeCallbacks(moveLongPressRunnable)
         handler.removeCallbacks(voiceRunnable)
         
-        if (isTouchDragging) {
-            isTouchDragging = false
+        // Only send UP events if we actually sent corresponding DOWN events
+        if (isTouchDragging && hasSentTouchDown) {
             injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
         }
+        isTouchDragging = false
+        hasSentTouchDown = false
         
-        if (isLeftKeyHeld) {
-            isLeftKeyHeld = false
+        if (isLeftKeyHeld && hasSentMouseDown) {
             injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
         }
+        isLeftKeyHeld = false
         
-        if (isRightKeyHeld) {
-            isRightKeyHeld = false
+        if (isRightKeyHeld && hasSentMouseDown) {
             injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
         }
+        isRightKeyHeld = false
+        hasSentMouseDown = false
         
-        if (isVScrolling || isHScrolling) {
+        if ((isVScrolling || isHScrolling) && hasSentScrollDown) {
             injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
-            isVScrolling = false
-            isHScrolling = false
         }
+        isVScrolling = false
+        isHScrolling = false
+        hasSentScrollDown = false
         
         isRightDragPending = false
         isMoving = false
         isResizing = false
         
+        // Update border color
         if (!isDebugMode) {
             if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
             else updateBorderColor(0x55FFFFFF.toInt())
@@ -4706,46 +4721,137 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 lastTouchX = event.x; lastTouchY = event.y
                 val inVZone = if (prefVPosLeft) event.x < scrollZoneThickness else event.x > (viewWidth - scrollZoneThickness)
                 val inHZone = if (prefHPosTop) event.y < scrollZoneThickness else event.y > (viewHeight - scrollZoneThickness)
-                if (inVZone) { isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } 
-                else if (inHZone) { isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt()); virtualScrollX = cursorX; virtualScrollY = cursorY; dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } 
+                if (inVZone) { 
+                    isVScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt())
+                    virtualScrollX = cursorX; virtualScrollY = cursorY
+                    dragDownTime = SystemClock.uptimeMillis()
+                    injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                    hasSentScrollDown = true
+                } 
+                else if (inHZone) { 
+                    isHScrolling = true; vibrate(); updateBorderColor(0xFF00FFFF.toInt())
+                    virtualScrollX = cursorX; virtualScrollY = cursorY
+                    dragDownTime = SystemClock.uptimeMillis()
+                    injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                    hasSentScrollDown = true
+                } 
                 else handler.postDelayed(longPressRunnable, 400) 
             }
             MotionEvent.ACTION_MOVE -> { 
                 val rawDx = (event.x - lastTouchX) * cursorSpeed; val rawDy = (event.y - lastTouchY) * cursorSpeed
-                if (isVScrolling) { val dist = (event.y - lastTouchY) * scrollSpeed; if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } } 
-                else if (isHScrolling) { val dist = (event.x - lastTouchX) * scrollSpeed; if (abs(dist) > 0) { if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist; injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) } } 
+                if (isVScrolling) { 
+                    val dist = (event.y - lastTouchY) * scrollSpeed
+                    if (abs(dist) > 0) { 
+                        if (prefReverseScroll) virtualScrollY += dist else virtualScrollY -= dist
+                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) 
+                    } 
+                } 
+                else if (isHScrolling) { 
+                    val dist = (event.x - lastTouchX) * scrollSpeed
+                    if (abs(dist) > 0) { 
+                        if (prefReverseScroll) virtualScrollX += dist else virtualScrollX -= dist
+                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY) 
+                    } 
+                } 
                 else { 
                     var finalDx = rawDx; var finalDy = rawDy
                     when (rotationAngle) { 90 -> { finalDx = -rawDy; finalDy = rawDx }; 180 -> { finalDx = -rawDx; finalDy = -rawDy }; 270 -> { finalDx = rawDy; finalDy = -rawDx } }
-                    if (!isTouchDragging && (abs(rawDx) > 5 || abs(rawDy) > 5)) { handler.removeCallbacks(longPressRunnable); if (isRightDragPending) { isRightDragPending = false; handler.removeCallbacks(voiceRunnable); isRightKeyHeld = true; startKeyDrag(MotionEvent.BUTTON_SECONDARY) } }
+                    if (!isTouchDragging && (abs(rawDx) > 5 || abs(rawDy) > 5)) { 
+                        handler.removeCallbacks(longPressRunnable)
+                        if (isRightDragPending) { 
+                            isRightDragPending = false; handler.removeCallbacks(voiceRunnable)
+                            isRightKeyHeld = true; startKeyDrag(MotionEvent.BUTTON_SECONDARY) 
+                        } 
+                    }
                     val safeW = if (inputTargetDisplayId != currentDisplayId) targetScreenWidth.toFloat() else uiScreenWidth.toFloat()
                     val safeH = if (inputTargetDisplayId != currentDisplayId) targetScreenHeight.toFloat() else uiScreenHeight.toFloat()
                     cursorX = (cursorX + finalDx).coerceIn(0f, safeW); cursorY = (cursorY + finalDy).coerceIn(0f, safeH)
-                    if (inputTargetDisplayId == currentDisplayId) { cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt(); try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch(e: Exception) {} } 
-                    else { remoteCursorParams.x = cursorX.toInt(); remoteCursorParams.y = cursorY.toInt(); try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} }
-                    if (isTouchDragging) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
-                    else if (isLeftKeyHeld) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
-                    else if (isRightKeyHeld) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
+                    if (inputTargetDisplayId == currentDisplayId) { 
+                        cursorParams.x = cursorX.toInt(); cursorParams.y = cursorY.toInt()
+                        try { windowManager?.updateViewLayout(cursorLayout, cursorParams) } catch(e: Exception) {} 
+                    } 
+                    else { 
+                        remoteCursorParams.x = cursorX.toInt(); remoteCursorParams.y = cursorY.toInt()
+                        try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} 
+                    }
+                    if (isTouchDragging && hasSentTouchDown) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
+                    else if (isLeftKeyHeld && hasSentMouseDown) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
+                    else if (isRightKeyHeld && hasSentMouseDown) injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
                     else injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis())
                 }
                 lastTouchX = event.x; lastTouchY = event.y 
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { 
-                handler.removeCallbacks(longPressRunnable); if (isTouchDragging) stopTouchDrag()
-                if (isVScrolling || isHScrolling) { injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY); isVScrolling = false; isHScrolling = false }
-                if (isDebugMode) { showToast("Disp:$inputTargetDisplayId | X:${cursorX.toInt()} Y:${cursorY.toInt()}"); updateBorderColor(0xFFFFFF00.toInt()) } 
-                else { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()) } 
+                handler.removeCallbacks(longPressRunnable)
+                if (isTouchDragging) stopTouchDrag()
+                if ((isVScrolling || isHScrolling) && hasSentScrollDown) { 
+                    injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                }
+                isVScrolling = false; isHScrolling = false; hasSentScrollDown = false
+                if (isDebugMode) { 
+                    showToast("Disp:$inputTargetDisplayId | X:${cursorX.toInt()} Y:${cursorY.toInt()}")
+                    updateBorderColor(0xFFFFFF00.toInt()) 
+                } 
+                else { 
+                    if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
+                    else updateBorderColor(0x55FFFFFF.toInt()) 
+                } 
             } 
         } 
     }
     
     private fun performRotation() { rotationAngle = (rotationAngle + 90) % 360; cursorView?.rotation = rotationAngle.toFloat(); vibrate(); updateBorderColor(0xFFFFFF00.toInt()); }
-    private fun startKeyDrag(b: Int) { vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
-    private fun stopKeyDrag(b: Int) { if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime) }
-    private fun startTouchDrag() { isTouchDragging = true; vibrate(); updateBorderColor(0xFF00FF00.toInt()); dragDownTime = SystemClock.uptimeMillis(); injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime) }
-    private fun stopTouchDrag() { isTouchDragging = false; if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) else updateBorderColor(0x55FFFFFF.toInt()); injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime) }
-    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { if (shellService == null) return; Thread { try { shellService?.injectMouse(a, x, y, inputTargetDisplayId, s, b, t) } catch (e: Exception) {} }.start() }
-    private fun performClick(r: Boolean) { if (shellService == null) { bindShizuku(); return }; Thread { try { if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) } catch (e: Exception) {} }.start() }
+    
+    private fun startKeyDrag(b: Int) { 
+        vibrate(); updateBorderColor(0xFF00FF00.toInt())
+        dragDownTime = SystemClock.uptimeMillis()
+        injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_MOUSE, b, dragDownTime)
+        hasSentMouseDown = true
+    }
+    
+    private fun stopKeyDrag(b: Int) { 
+        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
+        else updateBorderColor(0x55FFFFFF.toInt())
+        if (hasSentMouseDown) {
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_MOUSE, b, dragDownTime)
+        }
+        hasSentMouseDown = false
+    }
+    
+    private fun startTouchDrag() { 
+        isTouchDragging = true; vibrate(); updateBorderColor(0xFF00FF00.toInt())
+        dragDownTime = SystemClock.uptimeMillis()
+        injectAction(MotionEvent.ACTION_DOWN, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
+        hasSentTouchDown = true
+    }
+    
+    private fun stopTouchDrag() { 
+        isTouchDragging = false
+        if (inputTargetDisplayId != currentDisplayId) updateBorderColor(0xFFFF00FF.toInt()) 
+        else updateBorderColor(0x55FFFFFF.toInt())
+        if (hasSentTouchDown) {
+            injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime)
+        }
+        hasSentTouchDown = false
+    }
+    
+    private fun injectAction(a: Int, s: Int, b: Int, t: Long, x: Float = cursorX, y: Float = cursorY) { 
+        if (shellService == null) return
+        Thread { 
+            try { shellService?.injectMouse(a, x, y, inputTargetDisplayId, s, b, t) } 
+            catch (e: Exception) { Log.e("OverlayService", "Inject failed", e) } 
+        }.start() 
+    }
+    
+    private fun performClick(r: Boolean) { 
+        if (shellService == null) { bindShizuku(); return }
+        Thread { 
+            try { 
+                if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
+                else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
+            } catch (e: Exception) {} 
+        }.start() 
+    }
     
     private fun cycleInputTarget() { 
         if (displayManager == null) return
