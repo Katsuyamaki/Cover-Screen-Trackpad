@@ -467,8 +467,9 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 // 2. Check DeviceID (Ignore 0 or Virtual devices)
                 val isFinger = event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
                 val isRealHardware = event.deviceId != 0 
+                val isHover = event.actionMasked == MotionEvent.ACTION_HOVER_MOVE || event.actionMasked == MotionEvent.ACTION_HOVER_ENTER || event.actionMasked == MotionEvent.ACTION_HOVER_EXIT
                 
-                if (!isFinger || !isRealHardware) {
+                if (!isFinger || !isRealHardware || isHover) {
                     return@setOnTouchListener false 
                 }
 
@@ -624,21 +625,24 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                         try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} 
                     }
                     
-                    // START FIX: Calculate Collision
+                    // SELF-INTERSECTION CHECK (Modified)
                     var skipInjection = false
                     if (inputTargetDisplayId == currentDisplayId && trackpadLayout != null) {
                         val tX = trackpadParams.x.toFloat()
                         val tY = trackpadParams.y.toFloat()
                         val tW = trackpadParams.width.toFloat()
                         val tH = trackpadParams.height.toFloat()
+
+                        // BUFFER ZONE: Add 100px margin to the detection box
+                        // This prevents the injection from getting close enough to the window edge
+                        // to cause the "fighting" interaction on the main screen.
+                        val buffer = 100f 
                         
-                        // Expand bounds slightly to prevent edge jitter
-                        if (cursorX >= tX && cursorX <= (tX + tW) && 
-                            cursorY >= tY && cursorY <= (tY + tH)) {
+                        if (cursorX >= (tX - buffer) && cursorX <= (tX + tW + buffer) && 
+                            cursorY >= (tY - buffer) && cursorY <= (tY + tH + buffer)) {
                             skipInjection = true
                         }
                     }
-                    // END FIX
 
                     if (!skipInjection) {
                         if (isTouchDragging && hasSentTouchDown) {
@@ -668,7 +672,7 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 hasSentScrollDown = false
                 
                 if (isDebugMode) { 
-                    showToast("Disp:$inputTargetDisplayId | X:${cursorX.toInt()} Y:${cursorY.toInt()}")
+                    showToast("Disp:\$inputTargetDisplayId | X:\${cursorX.toInt()} Y:\${cursorY.toInt()}")
                     updateBorderColor(0xFFFFFF00.toInt()) 
                 } 
                 else { 
