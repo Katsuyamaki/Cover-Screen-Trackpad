@@ -13,6 +13,7 @@ import android.content.ServiceConnection
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -625,14 +626,33 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                         try { remoteWindowManager?.updateViewLayout(remoteCursorLayout, remoteCursorParams) } catch(e: Exception) {} 
                     }
                     
-                    if (isTouchDragging && hasSentTouchDown) {
-                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
-                    } else if (isLeftKeyHeld && hasSentMouseDown) {
-                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
-                    } else if (isRightKeyHeld && hasSentMouseDown) {
-                        injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
-                    } else {
-                        injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis())
+                    // SELF-INTERSECTION CHECK:
+                    // If target is LOCAL (same display) AND cursor is inside trackpad window bounds...
+                    // DO NOT INJECT EVENTS. This prevents the "Stuck" infinite loop / Action Cancel.
+                    var skipInjection = false
+                    if (inputTargetDisplayId == currentDisplayId && trackpadLayout != null) {
+                        val tX = trackpadParams.x
+                        val tY = trackpadParams.y
+                        val tW = trackpadParams.width
+                        val tH = trackpadParams.height
+                        
+                        // Simple AABB collision check
+                        if (cursorX >= tX && cursorX <= (tX + tW) && 
+                            cursorY >= tY && cursorY <= (tY + tH)) {
+                            skipInjection = true
+                        }
+                    }
+
+                    if (!skipInjection) {
+                        if (isTouchDragging && hasSentTouchDown) {
+                            injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
+                        } else if (isLeftKeyHeld && hasSentMouseDown) {
+                            injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_PRIMARY, dragDownTime)
+                        } else if (isRightKeyHeld && hasSentMouseDown) {
+                            injectAction(MotionEvent.ACTION_MOVE, InputDevice.SOURCE_MOUSE, MotionEvent.BUTTON_SECONDARY, dragDownTime)
+                        } else {
+                            injectAction(MotionEvent.ACTION_HOVER_MOVE, InputDevice.SOURCE_MOUSE, 0, SystemClock.uptimeMillis())
+                        }
                     }
                 }
                 lastTouchX = event.x
@@ -642,8 +662,13 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
                 handler.removeCallbacks(longPressRunnable)
                 if (isTouchDragging) stopTouchDrag()
                 
+                if ((isVScrolling || isHScrolling) && hasSentScrollDown) { 
+                    injectAction(MotionEvent.ACTION_UP, InputDevice.SOURCE_TOUCHSCREEN, 0, dragDownTime, virtualScrollX, virtualScrollY)
+                }
+                
                 isVScrolling = false
                 isHScrolling = false
+                hasSentScrollDown = false
                 
                 if (isDebugMode) { 
                     showToast("Disp:$inputTargetDisplayId | X:${cursorX.toInt()} Y:${cursorY.toInt()}")
@@ -700,20 +725,49 @@ class OverlayService : AccessibilityService(), DisplayManager.DisplayListener {
         }.start() 
     }
     
-    // FIX: Simplified click that DOES NOT mess with window flags
     private fun performClick(r: Boolean) { 
         if (shellService == null) { bindShizuku(); return }
         if (isClicking) return
         isClicking = true
         
-        Thread { 
-            try { 
-                if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
-                else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
-            } catch (e: Exception) {} 
-        }.start()
+        var isObstructed = false
+        if (trackpadLayout != null && inputTargetDisplayId == currentDisplayId) {
+            val winX = trackpadParams.x
+            val winY = trackpadParams.y
+            val winW = trackpadParams.width
+            val winH = trackpadParams.height
+            if (cursorX >= winX && cursorX <= (winX + winW) && cursorY >= winY && cursorY <= (winY + winH)) {
+                isObstructed = true
+            }
+        }
         
-        handler.postDelayed({ isClicking = false }, 100)
+        if (isObstructed) {
+            trackpadParams.flags = trackpadParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } catch(e: Exception) {}
+            
+            handler.postDelayed({
+                Thread { 
+                    try { 
+                        if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
+                        else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
+                    } catch (e: Exception) {} 
+                }.start()
+                
+                handler.postDelayed({
+                    trackpadParams.flags = trackpadParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                    try { windowManager?.updateViewLayout(trackpadLayout, trackpadParams) } catch(e: Exception) {}
+                    isClicking = false
+                }, 100)
+            }, 50)
+        } else {
+            Thread { 
+                try { 
+                    if (r) shellService?.execRightClick(cursorX, cursorY, inputTargetDisplayId) 
+                    else shellService?.execClick(cursorX, cursorY, inputTargetDisplayId) 
+                } catch (e: Exception) {} 
+            }.start()
+            handler.postDelayed({ isClicking = false }, 100)
+        }
     }
     
     private fun cycleInputTarget() { 
